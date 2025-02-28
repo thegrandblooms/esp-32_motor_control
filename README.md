@@ -7,4 +7,4 @@ This code is modular, and can interface with both DRV8825 and LN298N motor contr
 
 
 Wiring Diagram:
-![Wiring Diagram](https://github.com/user-attachments/assets/e1df6e76-e200-436d-9b34-6b80e26bfd8e)
+![image](https://github.com/user-attachments/assets/9b5da787-d41b-40db-b8d2-8a0d870375fb)
