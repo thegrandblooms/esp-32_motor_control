@@ -10,6 +10,11 @@ const unsigned long encoderDebounceTime = 0; // Sensitivity Adjustment 2 - milli
 const unsigned long SCREEN_PRE_RENDER_DELAY_MS = 5;    // Delay before LVGL rendering
 const unsigned long SCREEN_POST_RENDER_DELAY_MS = 150; // Delay after LVGL rendering
 
+// Long press settings
+#define LONG_PRESS_DURATION 800  // 800ms for long press
+volatile unsigned long buttonPressStartTime = 0;
+volatile bool longPressDetected = false;
+
 // Navigation state variables
 int8_t currentScreenIndex = 0;
 int8_t currentFocusIndex = 0;
@@ -19,6 +24,7 @@ extern lv_obj_t *currentAdjustmentObject;
 extern int adjustmentSensitivity;
 
 // Encoder state tracking
+volatile bool buttonCurrentlyPressed = false;
 volatile int lastEncoded = 0;
 volatile long encoderValue = 0;
 volatile long lastEncoderValue = 0;
@@ -55,6 +61,21 @@ void setupFocusStyles() {
     }
   }
 
+void toggleAdjustmentPrecision() {
+  fineAdjustmentMode = !fineAdjustmentMode;
+  
+  // Show feedback
+  showModeChangeIndicator();
+  
+  Serial.print("Switched to ");
+  Serial.println(fineAdjustmentMode ? "fine adjustment mode" : "coarse adjustment mode");
+}
+
+void showModeChangeIndicator() {
+  // For now, just print to serial
+  Serial.println(fineAdjustmentMode ? "MODE: FINE ADJUSTMENT" : "MODE: COARSE ADJUSTMENT");
+}
+
 void IRAM_ATTR handleEncoderInterrupt() {
   int MSB = digitalRead(ENCODER_PIN_A);
   int LSB = digitalRead(ENCODER_PIN_B);
@@ -69,35 +90,52 @@ void IRAM_ATTR handleEncoderInterrupt() {
 }
 
 void IRAM_ATTR handleButtonInterrupt() {
+  // This gets called on both rising and falling edges
+  bool buttonState = digitalRead(ENCODER_BUTTON_PIN);
   unsigned long currentTime = millis();
-  if (currentTime - lastButtonPress > debounceTime) {
-    buttonPressed = true;
-    lastButtonPress = currentTime;
+  
+  // Button pressed (LOW since it's pulled up)
+  if (buttonState == LOW && !buttonCurrentlyPressed) {
+    buttonCurrentlyPressed = true;
+    buttonPressStartTime = currentTime;
+  }
+  // Button released (HIGH)
+  else if (buttonState == HIGH && buttonCurrentlyPressed) {
+    buttonCurrentlyPressed = false;
+    
+    // Check if it was a long press
+    if (currentTime - buttonPressStartTime > LONG_PRESS_DURATION) {
+      longPressDetected = true;
+    } 
+    // Otherwise it's a normal press if it's past debounce time
+    else if (currentTime - buttonPressStartTime > 20) { // 20ms debounce
+      buttonPressed = true;
+    }
   }
 }
 
 void setupEncoder() {
-    // Configure pins
-    pinMode(ENCODER_PIN_A, INPUT_PULLUP);
-    pinMode(ENCODER_PIN_B, INPUT_PULLUP);
-    pinMode(ENCODER_BUTTON_PIN, INPUT_PULLUP);
-    
-    // Attach interrupts
-    attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), handleEncoderInterrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), handleEncoderInterrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_BUTTON_PIN), handleButtonInterrupt, FALLING);
-    
-    // Set up focusable objects for each screen
-    setupFocusableObjects();
-    
-    // Set up styles for focus states
-    setupFocusStyles();
-    
-    // Set initial focus on the first item of the current screen
-    if (focusableObjectsCount[currentScreenIndex] > 0) {
-      setFocus(focusableObjects[currentScreenIndex][0]);
-    }
+  // Configure pins
+  pinMode(ENCODER_PIN_A, INPUT_PULLUP);
+  pinMode(ENCODER_PIN_B, INPUT_PULLUP);
+  pinMode(ENCODER_BUTTON_PIN, INPUT_PULLUP);
+  
+  // Attach interrupts
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), handleEncoderInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), handleEncoderInterrupt, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_BUTTON_PIN), handleButtonInterrupt, CHANGE);
+  
+  // Set up focusable objects for each screen
+  setupFocusableObjects();
+  
+  // Set up styles for focus states
+  setupFocusStyles();
+  
+  // Set initial focus on the first item of the current screen
+  if (focusableObjectsCount[currentScreenIndex] > 0) {
+    setFocus(focusableObjects[currentScreenIndex][0]);
   }
+}
 
 void setupFocusableObjects() {
   // Main screen objects
@@ -143,6 +181,17 @@ void setupFocusableObjects() {
 void handleEncoder() {
   unsigned long currentTime = millis();
   
+  // Check for long press to toggle adjustment mode
+  if (longPressDetected) {
+    longPressDetected = false;
+    
+    // Only toggle if in value adjustment mode
+    if (valueAdjustmentMode) {
+      toggleAdjustmentPrecision();
+    }
+    return;
+  }
+
   // Skip regular UI navigation when in jog mode
   if (encoderJogMode) {
       return;
@@ -187,10 +236,10 @@ void handleEncoder() {
           lastEncoderTime = currentTime;
       }
   }
-  
+
   if (buttonPressed) {
-      selectCurrentItem();
-      buttonPressed = false;
+    selectCurrentItem();
+    buttonPressed = false;
   }
 }
 

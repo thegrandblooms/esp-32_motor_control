@@ -48,7 +48,7 @@ public:
     _stepPin(stepPin), _dirPin(dirPin), _enablePin(enablePin),
     _m0Pin(m0Pin), _m1Pin(m1Pin), _m2Pin(m2Pin),
     _sleepResetPin(sleepResetPin),
-    _microstepMode(FULL_STEP), _pulseWidthUs(1), _isAsleep(true) {}
+    _microstepMode(FULL_STEP), _pulseWidthUs(5), _isAsleep(true) {}
         
     // Initialize the driver
     void init() override {
