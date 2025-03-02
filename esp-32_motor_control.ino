@@ -10,7 +10,7 @@
 #include "StepperDriver.h"
 #include "L298NDriver.h"
 #include "DRV8825Driver.h"
-#include "StepperController.h"
+#include "TimerStepperControl.h"  // New timer-based control
 
 //===============================================
 // DRIVER CONFIGURATION
@@ -27,7 +27,6 @@
 #define L298N_ENABLE_A 18 // Connected to ENA on L298N
 #define L298N_ENABLE_B 23 // Connected to ENB on L298N
 
-// DRV8825 Pin definitions
 // DRV8825 Pin definitions
 #define DRV8825_ENABLE_PIN 9  // Enable pin
 #define DRV8825_M0_PIN 18      // Microstep mode 0
@@ -56,13 +55,13 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio (adjustable v
 // Speed limits in RPM (at the output shaft after gearing)
 #define MIN_RPM 0.1                      // Minimum speed in RPM
 #define MAX_RPM 60.0                     // Maximum speed in RPM
-#define DEFAULT_RPM 5.0                 // Default starting speed in RPM
+#define DEFAULT_RPM 5.0                  // Default starting speed in RPM
 #define RPM_FINE_ADJUST 0.1              // Fine adjustment increment in RPM
 #define RPM_COARSE_ADJUST 1.0            // Coarse adjustment increment in RPM
 
 // Step/rotation limits
 #define MIN_ROTATION_PERCENT 1.0         // Minimum rotation (1% of a full turn)
-#define MAX_ROTATION_PERCENT 1000.0       // Maximum rotation (5 full turns)
+#define MAX_ROTATION_PERCENT 1000.0      // Maximum rotation (10 full turns)
 #define DEFAULT_ROTATION_PERCENT 100.0   // Default rotation (1 full turn)
 #define ROTATION_FINE_ADJUST 1.0         // Fine adjustment increment (1% of rotation)
 #define ROTATION_COARSE_ADJUST 5.0       // Coarse adjustment increment (5% of rotation)
@@ -70,7 +69,6 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio (adjustable v
 // Acceleration and timing
 #define DEFAULT_ACCELERATION 400         // Steps per second per second
 #define MOTOR_IDLE_TIMEOUT_MS 5000       // 5 seconds before motor power saving
-#define STEP_CHECK_INTERVAL_US 50        // 50 microseconds between step checks
 
 //===============================================
 // ENCODER AND UI SETTINGS
@@ -87,8 +85,22 @@ bool encoderJogMode = false;
 long lastJogEncoderValue = 0;            // Track encoder position for jog mode
 
 //===============================================
-// MOTOR STATE VARIABLES
+// GLOBAL VARIABLES
 //===============================================
+// Create the appropriate driver and controller
+#if USE_L298N_DRIVER
+    L298NDriver driver(L298N_PIN1, L298N_PIN2, L298N_PIN3, L298N_PIN4, L298N_ENABLE_A, L298N_ENABLE_B);
+#elif USE_DRV8825_DRIVER
+    DRV8825Driver driver(DRV8825_STEP_PIN, DRV8825_DIR_PIN, DRV8825_ENABLE_PIN, 
+                         DRV8825_M0_PIN, DRV8825_M1_PIN, DRV8825_M2_PIN,
+                         DRV8825_SLEEP_RESET_PIN);
+#else
+    #error "No driver selected! Set either USE_L298N_DRIVER or USE_DRV8825_DRIVER to 1"
+#endif
+
+// Create the timer-based controller with the selected driver
+TimerStepperControl controller(&driver);
+
 // Motor operation state
 bool motorRunning = false;
 bool continuousMode = false;
@@ -102,26 +114,11 @@ int speedSetting;                        // Current speed in steps/sec
 
 // Timing variables
 unsigned long lastMotorActivityTime = 0;
-unsigned long lastStepTime = 0;
 
 // UI state tracking
 bool valueAdjustmentMode = false;        // Whether we're in value adjustment mode
 lv_obj_t *currentAdjustmentObject = NULL;// Currently selected UI element for adjustment
-int adjustmentSensitivity = 1;           // How much to change per encoder tick when adjusting
-
-// Create the appropriate driver and controller
-#if USE_L298N_DRIVER
-    L298NDriver driver(L298N_PIN1, L298N_PIN2, L298N_PIN3, L298N_PIN4, L298N_ENABLE_A, L298N_ENABLE_B);
-#elif USE_DRV8825_DRIVER
-    DRV8825Driver driver(DRV8825_STEP_PIN, DRV8825_DIR_PIN, DRV8825_ENABLE_PIN, 
-                         DRV8825_M0_PIN, DRV8825_M1_PIN, DRV8825_M2_PIN,
-                         DRV8825_SLEEP_RESET_PIN);
-#else
-    #error "No driver selected! Set either USE_L298N_DRIVER or USE_DRV8825_DRIVER to 1"
-#endif
-
-// Create the controller with the selected driver
-StepperController controller(&driver);
+int adjustmentSensitivity = ENCODER_FINE_SENSITIVITY; // How much to change per encoder tick
 
 // Forward declarations of event handlers
 void on_move_steps_start_clicked();
@@ -141,25 +138,31 @@ void on_back_clicked();
 void startStepperMotion(int steps, bool clockwise, int speed) {
     // If motor is already running, stop it
     if (motorRunning) {
-        stopMotor();
+        MotorCommand_t cmd;
+        cmd.cmd_type = CMD_STOP_MOTOR;
+        controller.sendCommand(&cmd);
+        motorRunning = false;
         update_ui_labels();
         return;
     }
     
-    // Wake the driver if it's asleep
+    // Wake the driver if it's using DRV8825
     #if USE_DRV8825_DRIVER
-    driver.wake();
+    controller.wake();
     #endif
     
     // Set direction and steps
     int relativeSteps = clockwise ? steps : -steps;
     
-    // Configure and start the motor
-    controller.setMaxSpeed(speed + 100); // Max speed slightly higher than running speed
-    controller.setSpeed(speed);
-    controller.move(relativeSteps);
+    // Send command to move
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_MOVE_STEPS;
+    cmd.position = relativeSteps;
+    cmd.speed = speed;
+    cmd.direction = clockwise;
+    controller.sendCommand(&cmd);
     
-    // Remember we're in step mode
+    // Remember state
     continuousMode = false;
     motorRunning = true;
     lastMotorActivityTime = millis();
@@ -178,22 +181,27 @@ void startStepperMotion(int steps, bool clockwise, int speed) {
 void startContinuousRotation(bool clockwise, int speed) {
     // If motor is already running, stop it
     if (motorRunning) {
-        stopMotor();
+        MotorCommand_t cmd;
+        cmd.cmd_type = CMD_STOP_MOTOR;
+        controller.sendCommand(&cmd);
+        motorRunning = false;
         update_ui_labels();
         return;
     }
     
-    // Wake the driver if it's asleep
+    // Wake the driver if it's using DRV8825
     #if USE_DRV8825_DRIVER
-    driver.wake();
+    controller.wake();
     #endif
     
-    // Configure and start the motor
-    controller.setMaxSpeed(speed + 100);
-    controller.setSpeed(speed);
-    controller.startContinuous(clockwise, speed);
+    // Send command for continuous rotation
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_START_CONTINUOUS;
+    cmd.speed = speed;
+    cmd.direction = clockwise;
+    controller.sendCommand(&cmd);
     
-    // Remember we're in continuous mode
+    // Remember state
     continuousMode = true;
     motorRunning = true;
     lastMotorActivityTime = millis();
@@ -208,22 +216,27 @@ void startContinuousRotation(bool clockwise, int speed) {
 }
 
 void stopMotor() {
-  controller.stop();
-  motorRunning = false;
-  
-  // Put driver to sleep to save power if power save is enabled
-  if (enableMotorPowerSave) {
-      #if USE_DRV8825_DRIVER
-      driver.sleep();
-      #endif
-  }
-  
-  // Update UI to reflect motor stopped state
-  update_ui_labels();
-  
-  Serial.println("Motor stopped");
+    // Send stop command
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_STOP_MOTOR;
+    controller.sendCommand(&cmd);
+    
+    motorRunning = false;
+    
+    // Put driver to sleep to save power if power save is enabled
+    if (enableMotorPowerSave) {
+        #if USE_DRV8825_DRIVER
+        controller.sleep();
+        #endif
+    }
+    
+    // Update UI to reflect motor stopped state
+    update_ui_labels();
+    
+    Serial.println("Motor stopped");
 }
 
+// Helper functions for unit conversions
 int getEffectiveStepsPerRevolution() {
     #if USE_DRV8825_DRIVER
     // Get current microstepping mode from the driver
@@ -322,9 +335,12 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
             lv_label_set_text(label, buffer);
         }
         
-        // Update running speed if motor is already running
+        // Update running speed if motor is already running in continuous mode
         if (motorRunning && continuousMode) {
-            controller.setSpeed(speedSetting);
+            MotorCommand_t cmd;
+            cmd.cmd_type = CMD_SET_SPEED;
+            cmd.speed = speedSetting;
+            controller.sendCommand(&cmd);
         }
         
         Serial.print("Speed adjusted to: ");
@@ -355,7 +371,7 @@ void checkEncoderJogMode() {
         long delta = encoderValue - lastJogEncoderValue;
         lastJogEncoderValue = encoderValue;
         
-        // Scale movement by sensitivity factor
+        // Scale movement by sensitivity factor - use ENCODER_JOG_STEP_MULTIPLIER instead
         int moveSteps = delta * ENCODER_JOG_STEP_MULTIPLIER;
         
         // Apply direction setting from UI
@@ -365,20 +381,18 @@ void checkEncoderJogMode() {
         
         // Only move if there's significant encoder change
         if (moveSteps != 0) {
-            // Set motor to move relative to current position
-            controller.move(moveSteps);
-            
-            // Use current speed setting for movement
-            controller.setSpeed(speedSetting);
+            // Send command to move steps
+            MotorCommand_t cmd;
+            cmd.cmd_type = CMD_MOVE_STEPS;
+            cmd.position = moveSteps;
+            cmd.speed = speedSetting;
+            controller.sendCommand(&cmd);
             
             Serial.print("Encoder jog: ");
             Serial.print(moveSteps);
             Serial.println(" steps");
         }
     }
-    
-    // Run the stepper
-    controller.run();
 }
 
 //===============================================
@@ -538,16 +552,6 @@ void update_ui_labels() {
     }
 }
 
-void setGearRatio(float newRatio) {
-    if (newRatio > 0.1 && newRatio < 100.0) {
-        gearRatio = newRatio;
-        // You could add EEPROM.write() here to save the setting
-        
-        // Update UI to reflect new ratio
-        update_ui_labels();
-    }
-}
-
 //===============================================
 // UI EVENT HANDLERS (Connected to LVGL UI)
 //===============================================
@@ -622,8 +626,11 @@ void on_manual_jog_start_clicked() {
         lv_label_set_text(start_manual_label, "Jogging...");
     }
     
-    // Enable the motor
-    driver.enable();
+    // Enable the motor for jogging
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_START_JOG;
+    cmd.speed = speedSetting;
+    controller.sendCommand(&cmd);
     
     Serial.println("Entering encoder jog mode");
 }
@@ -642,7 +649,10 @@ void on_manual_jog_speed_clicked() {
     
     // Update running speed if motor is already running
     if (motorRunning && continuousMode) {
-        controller.setSpeed(speedSetting);
+        MotorCommand_t cmd;
+        cmd.cmd_type = CMD_SET_SPEED;
+        cmd.speed = speedSetting;
+        controller.sendCommand(&cmd);
     }
 }
 
@@ -664,8 +674,17 @@ void on_continuous_rotation_direction_clicked() {
     
     // Update running direction if motor is already running
     if (motorRunning && continuousMode) {
-        controller.stop();
-        controller.startContinuous(clockwiseDirection, speedSetting);
+        // Stop current movement
+        MotorCommand_t stopCmd;
+        stopCmd.cmd_type = CMD_STOP_MOTOR;
+        controller.sendCommand(&stopCmd);
+        
+        // Start with new direction
+        MotorCommand_t startCmd;
+        startCmd.cmd_type = CMD_START_CONTINUOUS;
+        startCmd.direction = clockwiseDirection;
+        startCmd.speed = speedSetting;
+        controller.sendCommand(&startCmd);
     }
 }
 
@@ -683,20 +702,10 @@ void on_continuous_rotation_speed_clicked() {
     
     // Update running speed if motor is already running
     if (motorRunning && continuousMode) {
-        controller.setSpeed(speedSetting);
-    }
-}
-
-void onMicrosteppingChanged() {
-    // Update UI to reflect new step calculations based on microstepping
-    update_ui_labels();
-    
-    // Adjust current speed/position calculations if motor is running
-    if (motorRunning) {
-        float currentRPM = stepsToRPM(speedSetting, gearRatio);
-        // Set the new speed in steps/sec based on new microstepping value
-        speedSetting = rpmToSteps(currentRPM, gearRatio);
-        controller.setSpeed(speedSetting);
+        MotorCommand_t cmd;
+        cmd.cmd_type = CMD_SET_SPEED;
+        cmd.speed = speedSetting;
+        controller.sendCommand(&cmd);
     }
 }
 
@@ -712,24 +721,20 @@ void on_back_clicked() {
 void setup() {
     // Initialize serial communication
     Serial.begin(115200);
-    Serial.println("Stepper Motor Controller - Enhanced Parameters");
-    
-    // Initialize our motor driver and controller
-    controller.init();
+    Serial.println("Stepper Motor Controller - Hardware Timer Version");
     
     // Convert RPM to steps/sec for initial values
     speedSetting = rpmToSteps(DEFAULT_RPM, gearRatio);
     targetSteps = rotationPercentToSteps(DEFAULT_ROTATION_PERCENT, gearRatio);
     
-    controller.setMaxSpeed(speedSetting * 1.5); // Max speed slightly higher than running
-    controller.setAcceleration(DEFAULT_ACCELERATION);
+    // Initialize our timer-based motor controller
+    controller.init();
     
     // Set microstepping mode for DRV8825 if used
     #if USE_DRV8825_DRIVER
     driver.setMicrostepMode(DEFAULT_MICROSTEP_MODE);
     // Explicitly wake the driver
-    driver.wake();
-    driver.setPulseWidth(5); // Ensure adequate pulse width for reliable operation
+    controller.wake();
     #endif
     
     // Initialize the display and UI
@@ -753,44 +758,44 @@ void setup() {
 void loop() {
     // Current time tracking
     unsigned long currentMillis = millis();
-    unsigned long currentMicros = micros();
     
-    // Always check encoder first for maximum responsiveness
+    // Handle UI updates
+    Timer_Loop();
+    ui_tick();
+    
+    // Handle encoder input (includes UI navigation and value adjustment)
     handleEncoder();
     
-    // Handle motor control with consistent timing
-    if (motorRunning && (currentMicros - lastStepTime >= STEP_CHECK_INTERVAL_US)) {
-        // Update activity time
-        lastMotorActivityTime = currentMillis;
+    // Check if a long press was detected for toggling fine/coarse adjustment
+    if (longPressDetected) {
+        longPressDetected = false;
         
-        if (encoderJogMode) {
-            checkEncoderJogMode();
-        } else {
-            // Run the controller
-            controller.run();
-            
-            // Check if motion has completed (in step mode)
-            if (!continuousMode && !controller.isRunning()) {
-                motorRunning = false;
-                // Update UI to show motor has stopped
-                update_ui_labels();
-            }
+        // Only toggle if in value adjustment mode
+        if (valueAdjustmentMode) {
+            toggleAdjustmentPrecision();
         }
-        lastStepTime = currentMicros;
     }
     
-    // Handle motor idle timeout
+    // Encoder jog mode is now the only motion control left in the main loop
+    if (motorRunning && encoderJogMode) {
+        checkEncoderJogMode();
+    }
+    
+    // Check for motor idle timeout - automatic shutdown after inactivity
     if (enableMotorPowerSave && motorRunning && 
         !encoderJogMode && !continuousMode && 
-        controller.distanceToGo() == 0 &&
+        controller.isRunning() == false &&
         currentMillis - lastMotorActivityTime > MOTOR_IDLE_TIMEOUT_MS) {
         // Motor has been idle too long, disable it
         motorRunning = false;
-        driver.disable();
+        controller.sleep();
         update_ui_labels();
     }
-    
-    // Handle UI updates - don't throttle these as they're critical for responsiveness
-    Timer_Loop();
-    ui_tick();
+
+    // Poll for motor status updates (completed movements)
+    if (motorRunning && !encoderJogMode && !controller.isRunning()) {
+        motorRunning = false;
+        Serial.println("Motor stopped (reached target)");
+        update_ui_labels();
+    }
 }
