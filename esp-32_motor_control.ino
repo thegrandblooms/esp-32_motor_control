@@ -317,11 +317,11 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
     }
     else if (obj == objects.speed || obj == objects.speed_manual_jog || obj == objects.continuous_rotation_speed_button) {
         // Work with RPM instead of steps/second
+        // Work with RPM instead of steps/second
         float currentRPM = stepsToRPM(speedSetting, gearRatio);
         
         // Apply delta to RPM
         currentRPM += speedDelta;
-        
         // Apply bounds
         if (currentRPM < MIN_RPM) {
             currentRPM = MIN_RPM;

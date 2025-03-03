@@ -1,6 +1,7 @@
 // TimerStepperControl.cpp
 #include "TimerStepperControl.h"
 
+#define TIMER_INTERVAL_US 1000  // Start with 1ms for safety
 // Initialize static instance pointer
 TimerStepperControl* TimerStepperControl::instance = nullptr;
 
@@ -53,9 +54,8 @@ void TimerStepperControl::init() {
     // Configure timer alarm
     gptimer_alarm_config_t alarm_config;
     alarm_config.reload_count = 0;
-    alarm_config.alarm_count = 1000; // 1ms intervals
+    alarm_config.alarm_count = TIMER_INTERVAL_US;
     alarm_config.flags.auto_reload_on_alarm = true;
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(_gptimer, &alarm_config));
     
     // Register timer callback
     gptimer_event_callbacks_t cbs = {
