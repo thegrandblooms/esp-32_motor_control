@@ -17,7 +17,9 @@ TimerStepperControl::TimerStepperControl(StepperDriver* driver) :
     _commandQueue(nullptr),
     _motorTaskHandle(nullptr),
     _minStepInterval(1000), // Default 1ms between steps
-    _lastStepTime(0)
+    _lastStepTime(0),
+    _stepAccumulator(0.0f),
+    _stepsPerMs(0.0f)
 {
     // Store instance pointer for ISR
     instance = this;
@@ -84,43 +86,49 @@ bool IRAM_ATTR TimerStepperControl::timerCallback(gptimer_handle_t timer,
 
 // Process a single step if needed
 void TimerStepperControl::processStep() {
-    // Get current time
-    unsigned long currentTime = micros();
+    // Only process if we're supposed to be running
+    if (!_isRunning) return;
     
-    // Check if it's time for the next step
-    if (currentTime - _lastStepTime >= _minStepInterval) {
-        // For continuous rotation, just keep stepping
+    // Add step accumulation based on timer interval
+    _stepAccumulator += _stepsPerMs;
+    
+    // Check if we've accumulated enough for a step
+    if (_stepAccumulator >= 1.0f) {
+        // Reset accumulator but keep the fractional part
+        _stepAccumulator -= 1.0f;
+        
+        // For continuous rotation mode
         if (_isContinuous) {
+            // Apply direction and take step
             _driver->setDirection(_direction);
             _driver->step();
+            
+            // Update position counter
             if (_direction) {
                 _currentPosition++;
             } else {
                 _currentPosition--;
             }
-            _lastStepTime = currentTime;
             return;
         }
         
-        // For position control, check if we've reached the target
+        // For position control mode, check if we've reached the target
         if (_currentPosition == _targetPosition) {
             _isRunning = false;
             _driver->disable();
             return;
         }
         
-        // Determine direction to move
+        // Determine direction based on position difference
         if (_currentPosition < _targetPosition) {
-            _driver->setDirection(true); // clockwise
+            _driver->setDirection(true);
             _driver->step();
             _currentPosition++;
         } else {
-            _driver->setDirection(false); // counterclockwise
+            _driver->setDirection(false);
             _driver->step();
             _currentPosition--;
         }
-        
-        _lastStepTime = currentTime;
     }
 }
 
@@ -154,6 +162,8 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f; // Add this line
+            _stepAccumulator = 0.0f;        // Add this line
             _isRunning = true;
             _isContinuous = false;
             _driver->enable();
@@ -164,6 +174,8 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f; // Add this line
+            _stepAccumulator = 0.0f;        // Add this line
             _isRunning = true;
             _isContinuous = false;
             _driver->enable();
@@ -173,6 +185,7 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f; // Add this line
             break;
             
         case CMD_START_JOG:
@@ -180,6 +193,8 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f; // Add this line
+            _stepAccumulator = 0.0f;        // Add this line
             _isRunning = true; // This allows the motor to be responsive to jog commands
             _isContinuous = false;
             _driver->enable();
@@ -190,6 +205,8 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f; // Add this line
+            _stepAccumulator = 0.0f;        // Add this line
             _isRunning = true;
             _isContinuous = true;
             _driver->setDirection(_direction);

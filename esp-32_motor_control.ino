@@ -254,10 +254,15 @@ float stepsToRPM(int stepsPerSecond, float ratio) {
     return (stepsPerSecond * 60.0) / (effectiveSteps * ratio);
 }
 
-int rpmToSteps(float rpm, float ratio) {
+float rpmToSteps(float rpm, float ratio) {
     // Convert RPM to steps/second
     int effectiveSteps = getEffectiveStepsPerRevolution();
-    return (rpm * effectiveSteps * ratio) / 60.0;
+    return (rpm * effectiveSteps * ratio) / 60.0f;
+}
+
+int safeRoundStepsPerSec(float stepsPerSec) {
+    if (stepsPerSec <= 0) return 0;  // Handle zero/negative case
+    return max(1, (int)round(stepsPerSec));  // Never round down to zero
 }
 
 float stepsToRotationPercent(int steps, float ratio) {
@@ -325,7 +330,7 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         }
         
         // Convert back to steps/second
-        speedSetting = rpmToSteps(currentRPM, gearRatio);
+        speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
         
         // Update the label
         char buffer[20];
@@ -724,7 +729,7 @@ void setup() {
     Serial.println("Stepper Motor Controller - Hardware Timer Version");
     
     // Convert RPM to steps/sec for initial values
-    speedSetting = rpmToSteps(DEFAULT_RPM, gearRatio);
+    speedSetting = safeRoundStepsPerSec(rpmToSteps(DEFAULT_RPM, gearRatio));
     targetSteps = rotationPercentToSteps(DEFAULT_ROTATION_PERCENT, gearRatio);
     
     // Initialize our timer-based motor controller

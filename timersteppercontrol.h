@@ -87,6 +87,8 @@ private:
     // Step timing variables
     unsigned long _minStepInterval; // Microseconds between steps
     unsigned long _lastStepTime;    // Time of last step
+    float _stepAccumulator;        // Tracks fractional steps
+    float _stepsPerMs;             // Steps per millisecond (for timer-based stepping)
     
     // Static task function
     static void motorControlTask(void* pvParameters);
