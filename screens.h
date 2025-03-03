@@ -53,7 +53,6 @@ typedef struct _objects_t {
     lv_obj_t *back_3;
     lv_obj_t *acceleration_button;
     lv_obj_t *microstepping_button;
-    lv_obj_t *increments_setting;
 } objects_t;
 
 extern objects_t objects;
