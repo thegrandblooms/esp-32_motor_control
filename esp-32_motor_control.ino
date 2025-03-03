@@ -10,7 +10,7 @@
 #include "StepperDriver.h"
 #include "L298NDriver.h"
 #include "DRV8825Driver.h"
-#include "TimerStepperControl.h"  // New timer-based control
+#include "TimerStepperControl.h"
 
 //===============================================
 // DRIVER CONFIGURATION
@@ -47,7 +47,7 @@
 #define DEFAULT_MICROSTEP_MODE 8         // Using 1/8 microstepping for smooth operation
 
 // Gear ratio and transmission settings
-float gearRatio = 5.0;                   // Default 5:1 gear ratio (adjustable via settings)
+float gearRatio = 5.0;                   // Default 5:1 gear ratio
 
 //===============================================
 // MOTION PARAMETERS
@@ -117,7 +117,7 @@ unsigned long lastMotorActivityTime = 0;
 
 // UI state tracking
 bool valueAdjustmentMode = false;        // Whether we're in value adjustment mode
-lv_obj_t *currentAdjustmentObject = NULL;// Currently selected UI element for adjustment
+lv_obj_t *currentAdjustmentObject = NULL; // Currently selected UI element for adjustment
 int adjustmentSensitivity = ENCODER_FINE_SENSITIVITY; // How much to change per encoder tick
 
 // Forward declarations of event handlers
@@ -776,7 +776,6 @@ void loop() {
         }
     }
     
-    // Encoder jog mode is now the only motion control left in the main loop
     if (motorRunning && encoderJogMode) {
         checkEncoderJogMode();
     }

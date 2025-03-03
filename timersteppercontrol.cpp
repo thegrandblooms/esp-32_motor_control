@@ -41,14 +41,14 @@ void TimerStepperControl::init() {
         &_motorTaskHandle
     );
     
-    // Configure timer - FIXED
+    // Configure timer
     gptimer_config_t timer_config;
     timer_config.clk_src = GPTIMER_CLK_SRC_DEFAULT;
     timer_config.direction = GPTIMER_COUNT_UP;
     timer_config.resolution_hz = 1000000;  // 1MHz = 1us resolution
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &_gptimer));
     
-    // Configure timer alarm - FIXED
+    // Configure timer alarm
     gptimer_alarm_config_t alarm_config;
     alarm_config.reload_count = 0;
     alarm_config.alarm_count = 1000; // 1ms intervals
@@ -223,7 +223,7 @@ long TimerStepperControl::getCurrentPosition() {
     return _currentPosition;
 }
 
-// For power management - FIXED to use compile-time check instead of dynamic_cast
+// For power management
 void TimerStepperControl::sleep() {
     _driver->disable();
     

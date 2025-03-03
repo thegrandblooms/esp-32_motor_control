@@ -7,7 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "StepperDriver.h"  // Keep using your driver abstraction
+#include "StepperDriver.h"
 #include "DRV8825Driver.h"  // For DRV8825-specific features
 
 // Define command types for motor control
