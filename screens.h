@@ -13,6 +13,7 @@ typedef struct _objects_t {
     lv_obj_t *manual_jog_page;
     lv_obj_t *continuous_rotation_page;
     lv_obj_t *sequence_page;
+    lv_obj_t *sequence_positions_page;
     lv_obj_t *settings_page;
     lv_obj_t *header;
     lv_obj_t *menu;
@@ -39,11 +40,15 @@ typedef struct _objects_t {
     lv_obj_t *header_5;
     lv_obj_t *back_4;
     lv_obj_t *continuous_rotation_start_button_1;
-    lv_obj_t *position_0_button;
-    lv_obj_t *position_1_button;
-    lv_obj_t *position_2_button;
-    lv_obj_t *position_3_button;
+    lv_obj_t *sequence_positions_button;
     lv_obj_t *sequence_speed_button;
+    lv_obj_t *sequence_direction_button;
+    lv_obj_t *header_6;
+    lv_obj_t *back_5;
+    lv_obj_t *sequence_position_0_button;
+    lv_obj_t *sequence_position_1_button;
+    lv_obj_t *sequence_position_2_button;
+    lv_obj_t *sequence_position_3_button;
     lv_obj_t *header_4;
     lv_obj_t *back_3;
     lv_obj_t *acceleration_button;
@@ -59,7 +64,8 @@ enum ScreensEnum {
     SCREEN_ID_MANUAL_JOG_PAGE = 3,
     SCREEN_ID_CONTINUOUS_ROTATION_PAGE = 4,
     SCREEN_ID_SEQUENCE_PAGE = 5,
-    SCREEN_ID_SETTINGS_PAGE = 6,
+    SCREEN_ID_SEQUENCE_POSITIONS_PAGE = 6,
+    SCREEN_ID_SETTINGS_PAGE = 7,
 };
 
 void create_screen_main();
@@ -76,6 +82,9 @@ void tick_screen_continuous_rotation_page();
 
 void create_screen_sequence_page();
 void tick_screen_sequence_page();
+
+void create_screen_sequence_positions_page();
+void tick_screen_sequence_positions_page();
 
 void create_screen_settings_page();
 void tick_screen_settings_page();
