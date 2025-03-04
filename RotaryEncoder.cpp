@@ -34,8 +34,8 @@ unsigned long lastEncoderTime = 0;
 
 // Screen navigation information
 // Define the focusable objects for each screen
-lv_obj_t** focusableObjects[4]; // Array for each screen
-int focusableObjectsCount[4]; // Count for each screen
+lv_obj_t** focusableObjects[7]; // Array for each screen
+int focusableObjectsCount[7]; // Count for each screen
 
 // Forward declaration
 void setupFocusableObjects();
@@ -138,44 +138,77 @@ void setupEncoder() {
 }
 
 void setupFocusableObjects() {
-  // Main screen objects
+  // Main screen objects - ADD auto_button and settings_button to focusable list
   static lv_obj_t* mainScreenObjects[] = {
-    objects.move_steps,
-    objects.manual_jog,
-    objects.continuous
+      objects.move_steps,
+      objects.manual_jog,
+      objects.continuous,
+      objects.auto_button,      // Added sequence button
+      objects.settings_button   // Added settings button
   };
   focusableObjects[0] = mainScreenObjects;
-  focusableObjectsCount[0] = 3;
+  focusableObjectsCount[0] = 5;  // Updated count to 5
   
-  // Move steps screen
+  // Move steps screen - no changes needed
   static lv_obj_t* moveStepsScreenObjects[] = {
-    objects.back,
-    objects.start,
-    objects.step_num,
-    objects.clockwise,
-    objects.speed
+      objects.back,
+      objects.start,
+      objects.step_num,
+      objects.clockwise,
+      objects.speed
   };
   focusableObjects[1] = moveStepsScreenObjects;
   focusableObjectsCount[1] = 5;
   
-  // Manual jog screen
+  // Manual jog screen - no changes needed
   static lv_obj_t* manualJogScreenObjects[] = {
-    objects.back_1,
-    objects.start_1,
-    objects.speed_manual_jog
+      objects.back_1,
+      objects.start_1,
+      objects.speed_manual_jog
   };
   focusableObjects[2] = manualJogScreenObjects;
   focusableObjectsCount[2] = 3;
   
-  // Continuous rotation screen
+  // Continuous rotation screen - no changes needed
   static lv_obj_t* continuousRotationScreenObjects[] = {
-    objects.back_2,
-    objects.continuous_rotation_start_button,
-    objects.continuous_rotation_speed_button,
-    objects.continuous_rotation_direction_button
+      objects.back_2,
+      objects.continuous_rotation_start_button,
+      objects.continuous_rotation_speed_button,
+      objects.continuous_rotation_direction_button
   };
   focusableObjects[3] = continuousRotationScreenObjects;
   focusableObjectsCount[3] = 4;
+  
+  // ADD NEW SCREENS - Sequence screen
+  static lv_obj_t* sequenceScreenObjects[] = {
+      objects.back_4,
+      objects.continuous_rotation_start_button_1,
+      objects.sequence_positions_button,
+      objects.sequence_speed_button,
+      objects.sequence_direction_button
+  };
+  focusableObjects[4] = sequenceScreenObjects;
+  focusableObjectsCount[4] = 5;
+  
+  // ADD NEW SCREENS - Sequence positions screen
+  static lv_obj_t* sequencePositionsScreenObjects[] = {
+      objects.back_5,
+      objects.sequence_position_0_button,
+      objects.sequence_position_1_button,
+      objects.sequence_position_2_button,
+      objects.sequence_position_3_button
+  };
+  focusableObjects[5] = sequencePositionsScreenObjects;
+  focusableObjectsCount[5] = 5;
+  
+  // ADD NEW SCREENS - Settings screen
+  static lv_obj_t* settingsScreenObjects[] = {
+      objects.back_3,
+      objects.acceleration_button,
+      objects.microstepping_button
+  };
+  focusableObjects[6] = settingsScreenObjects;
+  focusableObjectsCount[6] = 3;
 }
 
 void handleEncoder() {
@@ -279,11 +312,10 @@ void selectCurrentItem() {
       
       // Restore original style (remove highlight)
       lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
-      
       return;
   }
   
-  // Check if this is a value that can be adjusted (steps or speed buttons)
+  // Check if this is a value that can be adjusted
   bool isAdjustableValue = false;
   
   if (currentScreenIndex == 1) { // Move Steps Page
@@ -295,6 +327,18 @@ void selectCurrentItem() {
   else if (currentScreenIndex == 3) { // Continuous Rotation Page
       isAdjustableValue = (currentObj == objects.continuous_rotation_speed_button);
   }
+  // ADD NEW ADJUSTABLE VALUES
+  else if (currentScreenIndex == 4) { // Sequence Page
+      isAdjustableValue = (currentObj == objects.sequence_speed_button);
+  }
+  else if (currentScreenIndex == 5) { // Sequence Positions Page
+      isAdjustableValue = (currentObj == objects.sequence_position_1_button || 
+                          currentObj == objects.sequence_position_2_button ||
+                          currentObj == objects.sequence_position_3_button);
+  }
+  else if (currentScreenIndex == 6) { // Settings Page
+      isAdjustableValue = (currentObj == objects.acceleration_button);
+  }
   
   // If this is an adjustable value, enter adjustment mode
   if (isAdjustableValue) {
@@ -303,70 +347,39 @@ void selectCurrentItem() {
       
       // Highlight the button to indicate adjustment mode
       lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
-      
       return;
   }
   
   // For other buttons, proceed with normal button click processing
   // Before loading a new screen, clear all focus states to prevent style artifacts
   for (int i = 0; i < focusableObjectsCount[currentScreenIndex]; i++) {
-    lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
+      lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
   }
   
-  // Handle navigation between screens based on the selected button
-  if (currentScreenIndex == 0) { // Main screen
-    if (currentObj == objects.move_steps) {
-      loadScreen(SCREEN_ID_MOVE_STEPS_PAGE);
-      currentScreenIndex = 1;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.manual_jog) {
-      loadScreen(SCREEN_ID_MANUAL_JOG_PAGE);
-      currentScreenIndex = 2;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.continuous) {
-      loadScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE);
-      currentScreenIndex = 3;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    }
-  } else {
-    // Handle back buttons on sub-screens
-    if ((currentScreenIndex == 1 && currentObj == objects.back) ||
-        (currentScreenIndex == 2 && currentObj == objects.back_1) ||
-        (currentScreenIndex == 3 && currentObj == objects.back_2)) {
-      loadScreen(SCREEN_ID_MAIN);
-      currentScreenIndex = 0;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else {
-      // Simulate a button click event for other buttons
-      lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
-    }
+  // Special handling for main screen buttons
+  if (currentScreenIndex == 0) {
+      if (currentObj == objects.auto_button) {
+          Serial.println("Sequence button pressed");
+          loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+          currentScreenIndex = 4;
+          currentFocusIndex = 0;
+          // After short delay, set focus on the first item
+          delay(200);
+          setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+          return;
+      }
+      else if (currentObj == objects.settings_button) {
+          Serial.println("Settings button pressed");
+          loadScreen(SCREEN_ID_SETTINGS_PAGE);
+          currentScreenIndex = 6;
+          currentFocusIndex = 0;
+          // After short delay, set focus on the first item
+          delay(200);
+          setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+          return;
+      }
   }
+  
+  // Forward the click event to the UI event handler
+  lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
 }

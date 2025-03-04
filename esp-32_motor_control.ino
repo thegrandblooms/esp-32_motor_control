@@ -78,6 +78,11 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 #define ENCODER_COARSE_SENSITIVITY 3     // For coarse adjustments
 #define ENCODER_JOG_STEP_MULTIPLIER 4    // Multiplier for steps per encoder tick in jog mode
 
+// External declarations for variables defined in RotaryEncoder.cpp
+extern lv_obj_t** focusableObjects[7]; // Array for each screen (increased to 7 for all screens)
+extern int focusableObjectsCount[7];   // Count for each screen (increased to 7 for all screens)
+extern void setFocus(lv_obj_t* obj);   // Function to set focus
+
 //===============================================
 // ENCODER JOG CONFIGURATION
 //===============================================
@@ -120,6 +125,17 @@ bool valueAdjustmentMode = false;        // Whether we're in value adjustment mo
 lv_obj_t *currentAdjustmentObject = NULL; // Currently selected UI element for adjustment
 int adjustmentSensitivity = ENCODER_FINE_SENSITIVITY; // How much to change per encoder tick
 
+// Settings variables
+float accelerationSetting = DEFAULT_ACCELERATION;
+
+// Sequence variables
+float sequencePositions[4] = {0.0, 100.0, 200.0, 300.0}; // % rotation (0 is current position)
+float sequenceSpeed = DEFAULT_RPM;
+bool sequenceDirections[3] = {true, false, true}; // Segment directions (true = clockwise)
+bool sequenceRunning = false;
+int currentSequencePosition = 0;
+bool sequenceDirectionSetting = true; // Initial sequence direction
+
 // Forward declarations of event handlers
 void on_move_steps_start_clicked();
 void on_move_steps_direction_clicked();
@@ -131,6 +147,25 @@ void on_continuous_rotation_start_clicked();
 void on_continuous_rotation_direction_clicked();
 void on_continuous_rotation_speed_clicked();
 void on_back_clicked();
+
+// Forward declarations for new event handlers
+void on_acceleration_button_clicked();
+void on_microstepping_button_clicked();
+void on_sequence_start_clicked();
+void on_sequence_speed_button_clicked();
+void on_sequence_direction_button_clicked();
+void on_sequence_position_button_clicked(int positionIndex);
+void on_sequence_position_0_button_clicked();
+void on_sequence_position_1_button_clicked();
+void on_sequence_position_2_button_clicked();
+void on_sequence_position_3_button_clicked();
+
+// Forward declarations for sequence execution functions
+void startSequence();
+void stopSequence();
+void moveToNextSequencePosition();
+void checkSequenceProgress();
+void updateSequenceLabels();
 
 //===============================================
 // MOTOR CONTROL FUNCTIONS
@@ -277,81 +312,185 @@ int rotationPercentToSteps(float percent, float ratio) {
     return (percent * effectiveSteps * ratio) / 100.0;
 }
 
-// Function to adjust values (speed, steps) when in adjustment mode
-void adjustValueByEncoder(lv_obj_t* obj, int delta) {
+// Extended function to adjust values (speed, steps, etc.) when in adjustment mode
+void adjustValueByEncoderExtended(lv_obj_t* obj, int delta) {
+    // First check if this is one of the original UI elements, if so use the original implementation
+    if (obj == objects.step_num || obj == objects.speed || 
+        obj == objects.speed_manual_jog || obj == objects.continuous_rotation_speed_button) {
+        
+        // Determine sensitivity based on fine/coarse mode
+        float speedAdjustment = fineAdjustmentMode ? RPM_FINE_ADJUST : RPM_COARSE_ADJUST;
+        float rotationAdjustment = fineAdjustmentMode ? ROTATION_FINE_ADJUST : ROTATION_COARSE_ADJUST;
+        
+        // Apply proper magnitude based on delta and sensitivity
+        float speedDelta = delta * speedAdjustment;
+        float rotationDelta = delta * rotationAdjustment;
+        
+        // Check which value is being adjusted and modify accordingly
+        if (obj == objects.step_num) {
+            // Work with percentage of rotation instead of steps
+            float currentPercent = stepsToRotationPercent(targetSteps, gearRatio);
+            currentPercent += rotationDelta;
+            
+            // Apply bounds
+            if (currentPercent < MIN_ROTATION_PERCENT) {
+                currentPercent = MIN_ROTATION_PERCENT;
+            } else if (currentPercent > MAX_ROTATION_PERCENT) {
+                currentPercent = MAX_ROTATION_PERCENT;
+            }
+            
+            // Convert back to steps
+            targetSteps = rotationPercentToSteps(currentPercent, gearRatio);
+            
+            // Update the label
+            char buffer[20];
+            snprintf(buffer, sizeof(buffer), "Rot: %.1f%%", currentPercent);
+            lv_obj_t *label = lv_obj_get_child(obj, 0);
+            if (label) {
+                lv_label_set_text(label, buffer);
+            }
+            
+            Serial.print("Rotation adjusted to: ");
+            Serial.print(currentPercent);
+            Serial.println("%");
+        }
+        else if (obj == objects.speed || obj == objects.speed_manual_jog || obj == objects.continuous_rotation_speed_button) {
+            // Work with RPM instead of steps/second
+            float currentRPM = stepsToRPM(speedSetting, gearRatio);
+            
+            // Apply delta to RPM
+            currentRPM += speedDelta;
+            
+            // Apply bounds
+            if (currentRPM < MIN_RPM) {
+                currentRPM = MIN_RPM;
+            } else if (currentRPM > MAX_RPM) {
+                currentRPM = MAX_RPM;
+            }
+            
+            // Convert back to steps/second
+            speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
+            
+            // Update the label
+            char buffer[20];
+            snprintf(buffer, sizeof(buffer), "Speed: %.1f RPM", currentRPM);
+            lv_obj_t *label = lv_obj_get_child(obj, 0);
+            if (label) {
+                lv_label_set_text(label, buffer);
+            }
+            
+            // Update running speed if motor is already running in continuous mode
+            if (motorRunning && continuousMode) {
+                MotorCommand_t cmd;
+                cmd.cmd_type = CMD_SET_SPEED;
+                cmd.speed = speedSetting;
+                controller.sendCommand(&cmd);
+            }
+            
+            Serial.print("Speed adjusted to: ");
+            Serial.print(currentRPM);
+            Serial.println(" RPM");
+        }
+        
+        return;
+    }
+    
+    // Handle new UI elements
+    
     // Determine sensitivity based on fine/coarse mode
     float speedAdjustment = fineAdjustmentMode ? RPM_FINE_ADJUST : RPM_COARSE_ADJUST;
     float rotationAdjustment = fineAdjustmentMode ? ROTATION_FINE_ADJUST : ROTATION_COARSE_ADJUST;
+    float accelAdjustment = fineAdjustmentMode ? 10.0f : 50.0f; // Acceleration adjustment step
     
     // Apply proper magnitude based on delta and sensitivity
     float speedDelta = delta * speedAdjustment;
     float rotationDelta = delta * rotationAdjustment;
+    float accelDelta = delta * accelAdjustment;
     
-    // Check which value is being adjusted and modify accordingly
-    if (obj == objects.step_num) {
-        // Work with percentage of rotation instead of steps
-        float currentPercent = stepsToRotationPercent(targetSteps, gearRatio);
-        currentPercent += rotationDelta;
+    if (obj == objects.acceleration_button) {
+        // Adjust acceleration setting
+        accelerationSetting += accelDelta;
         
         // Apply bounds
-        if (currentPercent < MIN_ROTATION_PERCENT) {
-            currentPercent = MIN_ROTATION_PERCENT;
-        } else if (currentPercent > MAX_ROTATION_PERCENT) {
-            currentPercent = MAX_ROTATION_PERCENT;
+        if (accelerationSetting < 50.0f) {
+            accelerationSetting = 50.0f;
+        } else if (accelerationSetting > 2000.0f) {
+            accelerationSetting = 2000.0f;
         }
-        
-        // Convert back to steps
-        targetSteps = rotationPercentToSteps(currentPercent, gearRatio);
         
         // Update the label
         char buffer[20];
-        snprintf(buffer, sizeof(buffer), "Rot: %.1f%%", currentPercent);
+        snprintf(buffer, sizeof(buffer), "Accel: %.0f", accelerationSetting);
         lv_obj_t *label = lv_obj_get_child(obj, 0);
         if (label) {
             lv_label_set_text(label, buffer);
         }
         
-        Serial.print("Rotation adjusted to: ");
-        Serial.print(currentPercent);
-        Serial.println("%");
+        Serial.print("Acceleration adjusted to: ");
+        Serial.println(accelerationSetting);
     }
-    else if (obj == objects.speed || obj == objects.speed_manual_jog || obj == objects.continuous_rotation_speed_button) {
-        // Work with RPM instead of steps/second
-        float currentRPM = stepsToRPM(speedSetting, gearRatio);
-        
-        // Apply delta to RPM
-        currentRPM += speedDelta;
+    else if (obj == objects.sequence_speed_button) {
+        // Adjust sequence speed
+        sequenceSpeed += speedDelta;
         
         // Apply bounds
-        if (currentRPM < MIN_RPM) {
-            currentRPM = MIN_RPM;
-        } else if (currentRPM > MAX_RPM) {
-            currentRPM = MAX_RPM;
+        if (sequenceSpeed < MIN_RPM) {
+            sequenceSpeed = MIN_RPM;
+        } else if (sequenceSpeed > MAX_RPM) {
+            sequenceSpeed = MAX_RPM;
         }
-        
-        // Convert back to steps/second
-        speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
         
         // Update the label
         char buffer[20];
-        snprintf(buffer, sizeof(buffer), "Speed: %.1f RPM", currentRPM);
+        snprintf(buffer, sizeof(buffer), "Speed: %.1f RPM", sequenceSpeed);
         lv_obj_t *label = lv_obj_get_child(obj, 0);
         if (label) {
             lv_label_set_text(label, buffer);
         }
         
-        // Update running speed if motor is already running in continuous mode
-        if (motorRunning && continuousMode) {
-            MotorCommand_t cmd;
-            cmd.cmd_type = CMD_SET_SPEED;
-            cmd.speed = speedSetting;
-            controller.sendCommand(&cmd);
-        }
-        
-        Serial.print("Speed adjusted to: ");
-        Serial.print(currentRPM);
+        Serial.print("Sequence speed adjusted to: ");
+        Serial.print(sequenceSpeed);
         Serial.println(" RPM");
     }
+    else if (obj == objects.sequence_position_1_button || 
+             obj == objects.sequence_position_2_button || 
+             obj == objects.sequence_position_3_button) {
+        // Determine which position we're adjusting
+        int posIndex = 0;
+        if (obj == objects.sequence_position_1_button) posIndex = 1;
+        else if (obj == objects.sequence_position_2_button) posIndex = 2;
+        else if (obj == objects.sequence_position_3_button) posIndex = 3;
+        
+        // Adjust the rotation percentage
+        sequencePositions[posIndex] += rotationDelta;
+        
+        // Apply bounds
+        if (sequencePositions[posIndex] < MIN_ROTATION_PERCENT) {
+            sequencePositions[posIndex] = MIN_ROTATION_PERCENT;
+        } else if (sequencePositions[posIndex] > MAX_ROTATION_PERCENT * 5) { // Allow up to 5x max for sequences
+            sequencePositions[posIndex] = MAX_ROTATION_PERCENT * 5;
+        }
+        
+        // Update the label
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", posIndex, sequencePositions[posIndex]);
+        lv_obj_t *label = lv_obj_get_child(obj, 0);
+        if (label) {
+            lv_label_set_text(label, buffer);
+        }
+        
+        Serial.print("Sequence position ");
+        Serial.print(posIndex);
+        Serial.print(" adjusted to: ");
+        Serial.print(sequencePositions[posIndex]);
+        Serial.println("%");
+    }
+}
+
+// Function to adjust values (speed, steps, etc.) when in adjustment mode
+void adjustValueByEncoder(lv_obj_t* obj, int delta) {
+    // Call our extended function that handles both original and new UI elements
+    adjustValueByEncoderExtended(obj, delta);
 }
 
 // Function to handle encoder jog mode
@@ -401,6 +540,103 @@ void checkEncoderJogMode() {
 }
 
 //===============================================
+// SEQUENCE EXECUTION FUNCTIONS
+//===============================================
+void startSequence() {
+    // If motor is already running, stop it
+    if (motorRunning) {
+        MotorCommand_t cmd;
+        cmd.cmd_type = CMD_STOP_MOTOR;
+        controller.sendCommand(&cmd);
+        motorRunning = false;
+        update_ui_labels();
+    }
+    
+    // Setup sequence
+    sequenceRunning = true;
+    currentSequencePosition = 0;
+    
+    // Update UI to show we're running a sequence
+    lv_obj_t *label = lv_obj_get_child(objects.continuous_rotation_start_button_1, 0);
+    if (label) {
+        lv_label_set_text(label, "Stop");
+    }
+    
+    // Start by moving to first position
+    moveToNextSequencePosition();
+    
+    Serial.println("Sequence started");
+}
+
+void stopSequence() {
+    sequenceRunning = false;
+    
+    // Send stop command to motor
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_STOP_MOTOR;
+    controller.sendCommand(&cmd);
+    motorRunning = false;
+    
+    // Update UI to show we've stopped
+    lv_obj_t *label = lv_obj_get_child(objects.continuous_rotation_start_button_1, 0);
+    if (label) {
+        lv_label_set_text(label, "Start");
+    }
+    
+    Serial.println("Sequence stopped");
+}
+
+void moveToNextSequencePosition() {
+    if (!sequenceRunning || currentSequencePosition >= 3) {
+        // End of sequence or sequence stopped
+        stopSequence();
+        return;
+    }
+    
+    // Calculate target step count
+    int targetPosition = rotationPercentToSteps(sequencePositions[currentSequencePosition + 1], gearRatio);
+    
+    // Determine direction for this segment
+    bool direction;
+    if (currentSequencePosition == 0) {
+        // First movement uses the user-selected initial direction
+        direction = sequenceDirectionSetting;
+    } else {
+        // Subsequent movements use the per-segment direction setting
+        direction = sequenceDirections[currentSequencePosition - 1];
+    }
+    
+    // Start the movement
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_MOVE_STEPS;
+    cmd.position = targetPosition;
+    cmd.speed = safeRoundStepsPerSec(rpmToSteps(sequenceSpeed, gearRatio));
+    cmd.direction = direction;
+    controller.sendCommand(&cmd);
+    
+    // Update state
+    motorRunning = true;
+    lastMotorActivityTime = millis();
+    currentSequencePosition++;
+    
+    Serial.print("Moving to sequence position ");
+    Serial.print(currentSequencePosition);
+    Serial.print(" (");
+    Serial.print(sequencePositions[currentSequencePosition]);
+    Serial.print("%), direction: ");
+    Serial.println(direction ? "clockwise" : "counterclockwise");
+}
+
+// Function to check sequence progress in the main loop
+void checkSequenceProgress() {
+    if (sequenceRunning && !controller.isRunning() && motorRunning) {
+        // Current movement finished, proceed to next position
+        motorRunning = false;
+        moveToNextSequencePosition();
+    }
+}
+
+//===============================================
 // UI FUNCTIONS
 //===============================================
 // LVGL event handler function that routes to the appropriate handler
@@ -412,18 +648,43 @@ static void ui_event_handler(lv_event_t *e) {
         // Main Screen
         if (target == objects.move_steps) {
             loadScreen(SCREEN_ID_MOVE_STEPS_PAGE);
+            currentScreenIndex = 1;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         } 
         else if (target == objects.manual_jog) {
             loadScreen(SCREEN_ID_MANUAL_JOG_PAGE);
+            currentScreenIndex = 2;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         } 
         else if (target == objects.continuous) {
             loadScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE);
+            currentScreenIndex = 3;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        // ADD HANDLERS FOR SEQUENCE AND SETTINGS BUTTONS
+        else if (target == objects.auto_button) {
+            loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+            currentScreenIndex = 4;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        else if (target == objects.settings_button) {
+            loadScreen(SCREEN_ID_SETTINGS_PAGE);
+            currentScreenIndex = 6;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         }
         
         // Move Steps Page
         else if (target == objects.back) {
             on_back_clicked();
             loadScreen(SCREEN_ID_MAIN);
+            currentScreenIndex = 0;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         }
         else if (target == objects.start) {
             on_move_steps_start_clicked();
@@ -442,6 +703,9 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.back_1) {
             on_back_clicked();
             loadScreen(SCREEN_ID_MAIN);
+            currentScreenIndex = 0;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         }
         else if (target == objects.start_1) {
             on_manual_jog_start_clicked();
@@ -454,6 +718,9 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.back_2) {
             on_back_clicked();
             loadScreen(SCREEN_ID_MAIN);
+            currentScreenIndex = 0;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
         }
         else if (target == objects.continuous_rotation_start_button) {
             on_continuous_rotation_start_clicked();
@@ -464,6 +731,66 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.continuous_rotation_speed_button) {
             on_continuous_rotation_speed_clicked();
         }
+        
+        // Settings Page
+        else if (target == objects.back_3) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_MAIN);
+            currentScreenIndex = 0;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        else if (target == objects.acceleration_button) {
+            on_acceleration_button_clicked();
+        }
+        else if (target == objects.microstepping_button) {
+            on_microstepping_button_clicked();
+        }
+        
+        // Sequence Page
+        else if (target == objects.back_4) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_MAIN);
+            currentScreenIndex = 0;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        else if (target == objects.continuous_rotation_start_button_1) {
+            on_sequence_start_clicked();
+        }
+        else if (target == objects.sequence_positions_button) {
+            loadScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE);
+            currentScreenIndex = 5;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        else if (target == objects.sequence_speed_button) {
+            on_sequence_speed_button_clicked();
+        }
+        else if (target == objects.sequence_direction_button) {
+            on_sequence_direction_button_clicked();
+        }
+        
+        // Sequence Positions Page
+        else if (target == objects.back_5) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+            currentScreenIndex = 4;
+            currentFocusIndex = 0;
+            setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+        }
+        else if (target == objects.sequence_position_0_button) {
+            on_sequence_position_0_button_clicked();
+        }
+        else if (target == objects.sequence_position_1_button) {
+            on_sequence_position_1_button_clicked();
+        }
+        else if (target == objects.sequence_position_2_button) {
+            on_sequence_position_2_button_clicked();
+        }
+        else if (target == objects.sequence_position_3_button) {
+            on_sequence_position_3_button_clicked();
+        }
     }
 }
 
@@ -473,6 +800,9 @@ void attach_event_handlers() {
     lv_obj_add_event_cb(objects.move_steps, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.manual_jog, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    // Add new event handlers for sequence and settings
+    lv_obj_add_event_cb(objects.auto_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.settings_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     
     // Move Steps Page
     lv_obj_add_event_cb(objects.back, ui_event_handler, LV_EVENT_CLICKED, NULL);
@@ -491,6 +821,25 @@ void attach_event_handlers() {
     lv_obj_add_event_cb(objects.continuous_rotation_start_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous_rotation_direction_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous_rotation_speed_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Add new event handlers - Settings Page
+    lv_obj_add_event_cb(objects.back_3, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.acceleration_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.microstepping_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Add new event handlers - Sequence Page 
+    lv_obj_add_event_cb(objects.back_4, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.continuous_rotation_start_button_1, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_positions_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_speed_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_direction_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Add new event handlers - Sequence Positions Page
+    lv_obj_add_event_cb(objects.back_5, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_0_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_1_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_2_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_3_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
 }
 
 // Function to update UI labels based on current settings
@@ -554,6 +903,80 @@ void update_ui_labels() {
     lv_obj_t *start_cont_label = lv_obj_get_child(objects.continuous_rotation_start_button, 0);
     if (start_cont_label) {
         lv_label_set_text(start_cont_label, motorRunning ? "Stop" : "Start");
+    }
+    
+    // Update new UI elements
+    updateSequenceLabels();
+}
+
+// Function to update sequence-related labels
+void updateSequenceLabels() {
+    // Update microstepping button label
+    lv_obj_t *microstepping_label = lv_obj_get_child(objects.microstepping_button, 0);
+    if (microstepping_label) {
+        #if USE_DRV8825_DRIVER
+        char buffer[20];
+        int currentMode = driver.getMicrostepMode();
+        snprintf(buffer, sizeof(buffer), "Microstep: 1/%d", currentMode);
+        lv_label_set_text(microstepping_label, buffer);
+        #else
+        lv_label_set_text(microstepping_label, "No Microstepping");
+        #endif
+    }
+    
+    // Update acceleration button label
+    lv_obj_t *accel_label = lv_obj_get_child(objects.acceleration_button, 0);
+    if (accel_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Accel: %.0f", accelerationSetting);
+        lv_label_set_text(accel_label, buffer);
+    }
+    
+    // Update sequence direction button label
+    lv_obj_t *seq_dir_label = lv_obj_get_child(objects.sequence_direction_button, 0);
+    if (seq_dir_label) {
+        lv_label_set_text(seq_dir_label, sequenceDirectionSetting ? "Start: Clockwise" : "Start: Counter-CW");
+    }
+    
+    // Update sequence speed button label
+    lv_obj_t *seq_speed_label = lv_obj_get_child(objects.sequence_speed_button, 0);
+    if (seq_speed_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Speed: %.1f RPM", sequenceSpeed);
+        lv_label_set_text(seq_speed_label, buffer);
+    }
+    
+    // Update sequence start button label
+    lv_obj_t *seq_start_label = lv_obj_get_child(objects.continuous_rotation_start_button_1, 0);
+    if (seq_start_label) {
+        lv_label_set_text(seq_start_label, sequenceRunning ? "Stop" : "Start");
+    }
+    
+    // Update sequence position button labels
+    lv_obj_t *seq_pos0_label = lv_obj_get_child(objects.sequence_position_0_button, 0);
+    if (seq_pos0_label) {
+        lv_label_set_text(seq_pos0_label, "Position 0 (Here)");
+    }
+    
+    lv_obj_t *seq_pos1_label = lv_obj_get_child(objects.sequence_position_1_button, 0);
+    if (seq_pos1_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Pos 1: %.1f%%", sequencePositions[1]);
+        lv_label_set_text(seq_pos1_label, buffer);
+    }
+    
+    lv_obj_t *seq_pos2_label = lv_obj_get_child(objects.sequence_position_2_button, 0);
+    if (seq_pos2_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Pos 2: %.1f%%", sequencePositions[2]);
+        lv_label_set_text(seq_pos2_label, buffer);
+    }
+    
+    lv_obj_t *seq_pos3_label = lv_obj_get_child(objects.sequence_position_3_button, 0);
+    if (seq_pos3_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Pos 3: %.1f%%", sequencePositions[3]);
+        lv_label_set_text(seq_pos3_label, buffer);
     }
 }
 
@@ -718,6 +1141,169 @@ void on_continuous_rotation_speed_clicked() {
 void on_back_clicked() {
     // Stop the motor when going back to main screen
     stopMotor();
+    
+    // Also make sure to stop any sequence
+    if (sequenceRunning) {
+        stopSequence();
+    }
+}
+
+//===============================================
+// NEW UI EVENT HANDLERS
+//===============================================
+// Settings page handlers
+void on_acceleration_button_clicked() {
+    if (valueAdjustmentMode) {
+        valueAdjustmentMode = false;
+        currentAdjustmentObject = NULL;
+        
+        // Restore original style
+        lv_obj_set_style_bg_color(objects.acceleration_button, lv_color_hex(0xff656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+    
+    // Enter adjustment mode
+    valueAdjustmentMode = true;
+    currentAdjustmentObject = objects.acceleration_button;
+    
+    // Highlight the button to indicate adjustment mode
+    lv_obj_set_style_bg_color(objects.acceleration_button, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void on_microstepping_button_clicked() {
+    #if USE_DRV8825_DRIVER
+    // For DRV8825, cycle through microstepping modes
+    int currentMode = driver.getMicrostepMode();
+    int newMode;
+    
+    // Cycle through available modes: 1, 2, 4, 8, 16, 32
+    switch (currentMode) {
+        case 1: newMode = 2; break;
+        case 2: newMode = 4; break;
+        case 4: newMode = 8; break;
+        case 8: newMode = 16; break;
+        case 16: newMode = 32; break;
+        case 32: default: newMode = 1; break;
+    }
+    
+    // Apply new microstepping mode
+    driver.setMicrostepMode(newMode);
+    
+    // Update button label
+    lv_obj_t *label = lv_obj_get_child(objects.microstepping_button, 0);
+    if (label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Microstep: 1/%d", newMode);
+        lv_label_set_text(label, buffer);
+    }
+    
+    Serial.print("Microstepping mode changed to: 1/");
+    Serial.println(newMode);
+    #else
+    // For drivers without microstepping, just show a message
+    lv_obj_t *label = lv_obj_get_child(objects.microstepping_button, 0);
+    if (label) {
+        lv_label_set_text(label, "Not Supported");
+    }
+    #endif
+}
+
+// Sequence page handlers
+void on_sequence_start_clicked() {
+    // Toggle between start and stop
+    if (sequenceRunning) {
+        stopSequence();
+    } else {
+        startSequence();
+    }
+}
+
+void on_sequence_speed_button_clicked() {
+    if (valueAdjustmentMode) {
+        valueAdjustmentMode = false;
+        currentAdjustmentObject = NULL;
+        
+        // Restore original style
+        lv_obj_set_style_bg_color(objects.sequence_speed_button, lv_color_hex(0xff656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+    
+    // Enter adjustment mode
+    valueAdjustmentMode = true;
+    currentAdjustmentObject = objects.sequence_speed_button;
+    
+    // Highlight the button to indicate adjustment mode
+    lv_obj_set_style_bg_color(objects.sequence_speed_button, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void on_sequence_direction_button_clicked() {
+    sequenceDirectionSetting = !sequenceDirectionSetting;
+    
+    // Update button label
+    lv_obj_t *label = lv_obj_get_child(objects.sequence_direction_button, 0);
+    if (label) {
+        lv_label_set_text(label, sequenceDirectionSetting ? "Start: Clockwise" : "Start: Counter-CW");
+    }
+    
+    Serial.print("Sequence initial direction changed to: ");
+    Serial.println(sequenceDirectionSetting ? "clockwise" : "counterclockwise");
+}
+
+// Sequence positions page handlers
+void on_sequence_position_button_clicked(int positionIndex) {
+    // Get appropriate button
+    lv_obj_t *btn;
+    switch (positionIndex) {
+        case 0: btn = objects.sequence_position_0_button; break;
+        case 1: btn = objects.sequence_position_1_button; break;
+        case 2: btn = objects.sequence_position_2_button; break;
+        case 3: btn = objects.sequence_position_3_button; break;
+        default: return;
+    }
+    
+    // If already in adjustment mode, exit it
+    if (valueAdjustmentMode && currentAdjustmentObject == btn) {
+        valueAdjustmentMode = false;
+        currentAdjustmentObject = NULL;
+        
+        // Restore original style
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xff656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+    
+    // If it's position 0, just set to current position
+    if (positionIndex == 0) {
+        sequencePositions[0] = 0.0; // Position 0 is always 0% (current position)
+        lv_obj_t *label = lv_obj_get_child(btn, 0);
+        if (label) {
+            lv_label_set_text(label, "Position 0 (Here)");
+        }
+        Serial.println("Position 0 set to current position");
+        return;
+    }
+    
+    // Enter adjustment mode for other positions
+    valueAdjustmentMode = true;
+    currentAdjustmentObject = btn;
+    
+    // Highlight the button to indicate adjustment mode
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void on_sequence_position_0_button_clicked() {
+    on_sequence_position_button_clicked(0);
+}
+
+void on_sequence_position_1_button_clicked() {
+    on_sequence_position_button_clicked(1);
+}
+
+void on_sequence_position_2_button_clicked() {
+    on_sequence_position_button_clicked(2);
+}
+
+void on_sequence_position_3_button_clicked() {
+    on_sequence_position_button_clicked(3);
 }
 
 //===============================================
@@ -753,6 +1339,18 @@ void setup() {
     
     // Initialize the rotary encoder
     setupEncoder();
+    
+    // Initialize sequence positions
+    sequencePositions[0] = 0.0;  // Current position
+    sequencePositions[1] = 100.0; // Default: 100% rotation
+    sequencePositions[2] = 200.0; // Default: 200% rotation
+    sequencePositions[3] = 300.0; // Default: 300% rotation
+    
+    // Initialize sequence speed
+    sequenceSpeed = DEFAULT_RPM;
+    
+    // Set acceleration to match global setting
+    accelerationSetting = DEFAULT_ACCELERATION;
     
     // Update UI labels with initial values
     update_ui_labels();
@@ -801,5 +1399,10 @@ void loop() {
         motorRunning = false;
         Serial.println("Motor stopped (reached target)");
         update_ui_labels();
+    }
+    
+    // Check for sequence progress if sequence is running
+    if (sequenceRunning) {
+        checkSequenceProgress();
     }
 }
