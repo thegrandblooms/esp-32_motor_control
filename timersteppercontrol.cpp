@@ -13,13 +13,17 @@ TimerStepperControl::TimerStepperControl(StepperDriver* driver) :
     _speed(0),
     _currentPosition(0),
     _targetPosition(0),
+    _acceleration(6400), // Default acceleration
     _gptimer(nullptr),
     _commandQueue(nullptr),
     _motorTaskHandle(nullptr),
-    _minStepInterval(1000), // Default 1ms between steps
+    _minStepInterval(1000),
     _lastStepTime(0),
     _stepAccumulator(0.0f),
-    _stepsPerMs(0.0f)
+    _stepsPerMs(0.0f),
+    _currentSpeed(0.0f),
+    _lastAccelUpdateTime(0),
+    _jogMode(false)  // Initialize jog mode flag
 {
     // Store instance pointer for ISR
     instance = this;
@@ -89,8 +93,38 @@ void TimerStepperControl::processStep() {
     // Only process if we're supposed to be running
     if (!_isRunning) return;
     
-    // Add step accumulation based on timer interval
-    _stepAccumulator += _stepsPerMs;
+    // Get current time
+    unsigned long currentTime = micros();
+    unsigned long elapsedTime = currentTime - _lastAccelUpdateTime;
+    
+    // Update acceleration timestamp
+    _lastAccelUpdateTime = currentTime;
+    
+    // Update speed based on acceleration (but not in jog mode)
+    if (!_jogMode) {
+        // Existing acceleration logic...
+        if (_currentSpeed < _speed && _acceleration > 0) {
+            // Accelerating
+            _currentSpeed += _acceleration * (elapsedTime / 1000000.0f);
+            if (_currentSpeed > _speed) _currentSpeed = _speed; // Cap at target speed
+        } else if (_currentSpeed > _speed && _acceleration > 0) {
+            // Decelerating 
+            _currentSpeed -= _acceleration * (elapsedTime / 1000000.0f);
+            if (_currentSpeed < 0) _currentSpeed = 0; // Don't go negative
+        }
+    } else {
+        // In jog mode, use target speed directly - no acceleration
+        _currentSpeed = _speed;
+    }
+    
+    // Update acceleration timestamp
+    _lastAccelUpdateTime = currentTime;
+    
+    // Calculate step interval based on current speed (protect against division by zero)
+    unsigned long stepInterval = (_currentSpeed > 0) ? (1000000 / _currentSpeed) : 1000000;
+    
+    // Add step accumulation based on current speed and timer interval
+    _stepAccumulator += _currentSpeed * (elapsedTime / 1000000.0f);
     
     // Check if we've accumulated enough for a step
     if (_stepAccumulator >= 1.0f) {
@@ -167,6 +201,7 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _isRunning = true;
             _isContinuous = false;
             _driver->enable();
+            _jogMode = false;  // Clear jog mode flag
             break;
             
         case CMD_MOVE_STEPS:
@@ -179,6 +214,9 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _isRunning = true;
             _isContinuous = false;
             _driver->enable();
+            _currentSpeed = 0; // Start from standstill
+            _lastAccelUpdateTime = micros(); // Initialize timestamp
+            _jogMode = false;  // Clear jog mode flag
             break;
             
         case CMD_SET_SPEED:
@@ -193,10 +231,26 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
-            _stepsPerMs = _speed / 1000.0f; // Add this line
-            _stepAccumulator = 0.0f;        // Add this line
-            _isRunning = true; // This allows the motor to be responsive to jog commands
+            _stepsPerMs = _speed / 1000.0f;
+            _stepAccumulator = 0.0f;
+            _isRunning = true;
             _isContinuous = false;
+            _jogMode = true;  // Set jog mode flag
+            _driver->enable();
+            break;
+        
+        case CMD_MOVE_JOG:
+            // Move jog steps with no acceleration
+            _targetPosition = _currentPosition + cmd->position;
+            _speed = cmd->speed;
+            _driver->setSpeed(_speed);
+            _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
+            _stepsPerMs = _speed / 1000.0f;
+            _stepAccumulator = 0.0f;
+            _currentSpeed = _speed; // Set to full speed immediately
+            _isRunning = true;
+            _isContinuous = false;
+            _jogMode = true;
             _driver->enable();
             break;
             
@@ -211,12 +265,16 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             _isContinuous = true;
             _driver->setDirection(_direction);
             _driver->enable();
+            _currentSpeed = 0; // Start from standstill
+            _lastAccelUpdateTime = micros(); // Initialize timestamp
+            _jogMode = false;  // Clear jog mode flag
             break;
             
         case CMD_STOP_MOTOR:
             _isRunning = false;
             _isContinuous = false;
             _driver->disable();
+            _jogMode = false;  // Clear jog mode flag
             break;
             
         default:

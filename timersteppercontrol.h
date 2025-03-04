@@ -17,8 +17,10 @@ typedef enum {
     CMD_SET_SPEED,      // Set speed
     CMD_START_JOG,      // Start manual jog mode
     CMD_STOP_JOG,       // Stop manual jog mode
+    CMD_MOVE_JOG,       // Move jog steps (no acceleration)
     CMD_START_CONTINUOUS, // Start continuous rotation
-    CMD_STOP_MOTOR       // Stop any motion
+    CMD_STOP_MOTOR,      // Stop any motion
+    CMD_SET_ACCELERATION // New command to set acceleration
 } MotorCommandType;
 
 // Define command structure
@@ -28,6 +30,7 @@ typedef struct {
     int speed;               // Speed setting
     bool direction;          // Direction (true = clockwise)
     bool continuous;         // Whether in continuous mode
+    int acceleration;        // New field: Acceleration setting
 } MotorCommand_t;
 
 // Timer control class
@@ -59,6 +62,15 @@ public:
     // For power management
     void sleep();
     void wake();
+
+    void setAcceleration(int acceleration) { 
+        _acceleration = acceleration;
+        Serial.print("Motor acceleration set to: ");
+        Serial.println(_acceleration);
+    }
+
+    // Getter for current acceleration
+    int getAcceleration() { return _acceleration; }
     
 private:
     // Static pointer for ISR to access instance
@@ -74,6 +86,12 @@ private:
     volatile int _speed;
     volatile long _currentPosition;
     volatile long _targetPosition;
+    bool _jogMode;  // Flag to indicate we're in jog mode (bypass acceleration)
+
+    // Acceleration tracking
+    int _acceleration = 3200; // Default value, no need to share constants
+    float _currentSpeed;     // Current instantaneous speed in steps/sec
+    unsigned long _lastAccelUpdateTime; // Last time we updated acceleration
     
     // Hardware timer handle
     gptimer_handle_t _gptimer;

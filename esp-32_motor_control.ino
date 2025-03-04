@@ -67,7 +67,9 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 #define ROTATION_COARSE_ADJUST 5.0       // Coarse adjustment increment (5% of rotation)
 
 // Acceleration and timing
-#define DEFAULT_ACCELERATION 400         // Steps per second per second
+#define DEFAULT_ACCELERATION 3200         // Steps per second per second
+#define ACCEL_MIN 400 // minimum acceleration in settings
+#define ACCEL_MAX 12800 // maximum acceleration in settings
 #define MOTOR_IDLE_TIMEOUT_MS 5000       // 5 seconds before motor power saving
 
 //===============================================
@@ -111,6 +113,7 @@ bool fineAdjustmentMode = true;          // Toggle between fine/coarse adjustmen
 // Current settings (these get converted to/from user-friendly units)
 int targetSteps;                         // Target steps to move
 int speedSetting;                        // Current speed in steps/sec
+int accelerationSetting = DEFAULT_ACCELERATION; // Current acceleration in steps/sec²
 
 // Timing variables
 unsigned long lastMotorActivityTime = 0;
@@ -289,10 +292,12 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
     // Determine sensitivity based on fine/coarse mode
     float speedAdjustment = fineAdjustmentMode ? RPM_FINE_ADJUST : RPM_COARSE_ADJUST;
     float rotationAdjustment = fineAdjustmentMode ? ROTATION_FINE_ADJUST : ROTATION_COARSE_ADJUST;
+    float accelAdjustment = fineAdjustmentMode ? 10 : 50; // Fine: 10 steps/s², Coarse: 50 steps/s²
     
     // Apply proper magnitude based on delta and sensitivity
     float speedDelta = delta * speedAdjustment;
     float rotationDelta = delta * rotationAdjustment;
+    int accelDelta = delta * accelAdjustment;
     
     // Check which value is being adjusted and modify accordingly
     if (obj == objects.step_num) {
@@ -359,6 +364,24 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         Serial.print(currentRPM);
         Serial.println(" RPM");
     }
+    else if (obj == objects.acceleration_button) {
+        // Apply delta to acceleration
+        accelerationSetting += accelDelta;
+        
+        // Apply bounds
+        accelerationSetting = constrain(accelerationSetting, ACCEL_MIN, ACCEL_MAX);
+        
+        // Apply setting to controller immediately for consistent behavior
+        controller.setAcceleration(accelerationSetting);
+        
+        // Update the label
+        char buffer[30];
+        snprintf(buffer, sizeof(buffer), "Accel: %d steps/s²", accelerationSetting);
+        lv_obj_t *label = lv_obj_get_child(obj, 0);
+        if (label) {
+            lv_label_set_text(label, buffer);
+        }
+    }
 }
 
 // Function to handle encoder jog mode
@@ -393,9 +416,9 @@ void checkEncoderJogMode() {
         
         // Only move if there's significant encoder change
         if (moveSteps != 0) {
-            // Send command to move steps
+            // Send command to move steps with no acceleration
             MotorCommand_t cmd;
-            cmd.cmd_type = CMD_MOVE_STEPS;
+            cmd.cmd_type = CMD_MOVE_JOG;  // Use the jog-specific command
             cmd.position = moveSteps;
             cmd.speed = speedSetting;
             controller.sendCommand(&cmd);
@@ -638,6 +661,12 @@ void update_ui_labels() {
     if (start_cont_label) {
         lv_label_set_text(start_cont_label, motorRunning ? "Stop" : "Start");
     }
+    lv_obj_t *accel_label = lv_obj_get_child(objects.acceleration_button, 0);
+    if (accel_label) {
+        char buffer[30];
+        snprintf(buffer, sizeof(buffer), "Acceleration");
+        lv_label_set_text(accel_label, buffer);
+    }
 }
 
 //===============================================
@@ -847,11 +876,37 @@ void on_sequence_position_clicked(int position) {
     // Implementation will vary based on how you want to handle sequence positions
 }
 
-// Settings screen button handlers
 void on_settings_acceleration_clicked() {
-    // Toggle through acceleration presets
-    Serial.println("Adjusting acceleration setting");
-    // Actual implementation will go here
+    // If we're already in adjustment mode, exit it
+    if (valueAdjustmentMode && currentAdjustmentObject == objects.acceleration_button) {
+        valueAdjustmentMode = false;
+        currentAdjustmentObject = NULL;
+        
+        // Restore original style
+        lv_obj_set_style_bg_color(objects.acceleration_button, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+        
+        // Apply the acceleration setting directly to the controller
+        controller.setAcceleration(accelerationSetting);
+        return;
+    }
+    
+    // Get current acceleration from the controller
+    accelerationSetting = controller.getAcceleration();
+    
+    // Enter adjustment mode
+    valueAdjustmentMode = true;
+    currentAdjustmentObject = objects.acceleration_button;
+    
+    // Highlight the button
+    lv_obj_set_style_bg_color(objects.acceleration_button, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
+    
+    // Update the button text
+    char buffer[30];
+    snprintf(buffer, sizeof(buffer), "Accel: %d steps/s", accelerationSetting);
+    lv_obj_t *label = lv_obj_get_child(objects.acceleration_button, 0);
+    if (label) {
+        lv_label_set_text(label, buffer);
+    }
 }
 
 void on_settings_microstepping_clicked() {
@@ -887,10 +942,21 @@ void setup() {
     Serial.begin(115200);
     Serial.println("Stepper Motor Controller - Hardware Timer Version");
     
-    // Convert RPM to steps/sec for initial values
-    speedSetting = safeRoundStepsPerSec(rpmToSteps(DEFAULT_RPM, gearRatio));
-    targetSteps = rotationPercentToSteps(DEFAULT_ROTATION_PERCENT, gearRatio);
-    
+    // Initialize the display and UI
+    LCD_Init();
+    Set_Backlight(50); // Set LCD backlight to 50%
+    Lvgl_Init();
+    ui_init();
+
+    // Update UI labels with initial values
+    update_ui_labels();
+
+    // Attach event handlers to UI elements
+    attach_event_handlers();
+
+    // Initialize the rotary encoder
+    setupEncoder();
+
     // Initialize our timer-based motor controller
     controller.init();
     
@@ -900,21 +966,16 @@ void setup() {
     // Explicitly wake the driver
     controller.wake();
     #endif
-    
-    // Initialize the display and UI
-    LCD_Init();
-    Set_Backlight(50); // Set LCD backlight to 50%
-    Lvgl_Init();
-    ui_init();
-    
-    // Attach event handlers to UI elements
-    attach_event_handlers();
-    
-    // Initialize the rotary encoder
-    setupEncoder();
-    
-    // Update UI labels with initial values
-    update_ui_labels();
+
+    // Convert RPM to steps/sec for initial values
+    speedSetting = safeRoundStepsPerSec(rpmToSteps(DEFAULT_RPM, gearRatio));
+    targetSteps = rotationPercentToSteps(DEFAULT_ROTATION_PERCENT, gearRatio);
+
+    // Set acceleration
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_SET_ACCELERATION;
+    cmd.acceleration = accelerationSetting;
+    controller.sendCommand(&cmd);
     
     Serial.println("System ready!");
 }
