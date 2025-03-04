@@ -34,32 +34,32 @@ unsigned long lastEncoderTime = 0;
 
 // Screen navigation information
 // Define the focusable objects for each screen
-lv_obj_t** focusableObjects[4]; // Array for each screen
-int focusableObjectsCount[4]; // Count for each screen
+lv_obj_t** focusableObjects[7]; // Array for each screen (7 total screens)
+int focusableObjectsCount[7]; // Count for each screen
 
 // Forward declaration
 void setupFocusableObjects();
 void setFocus(lv_obj_t* obj);
 
 void setupFocusStyles() {
-    // Apply to all button styles on focus state
-    for (int i = 0; i < 4; i++) {
-      for (int j = 0; j < focusableObjectsCount[i]; j++) {
-        lv_obj_t* obj = focusableObjects[i][j];
-        
-        // Style for focused state - highlight with blue border or outline
-        lv_obj_set_style_border_color(obj, lv_color_hex(0x2196F3), LV_STATE_FOCUSED);  // Blue border
-        lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED);                       // Thicker border when focused
-        lv_obj_set_style_border_opa(obj, 255, LV_STATE_FOCUSED);                       // Full opacity
-        
-        // Optional: You can also change the background color slightly
-        lv_obj_set_style_bg_color(obj, lv_color_hex(0x808080), LV_STATE_FOCUSED);     // Darker background
-        
-        // Enable focus tracking on the object
-        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICK_FOCUSABLE);
-      }
+  // Apply to all button styles on focus state
+  for (int i = 0; i < 7; i++) { 
+    for (int j = 0; j < focusableObjectsCount[i]; j++) {
+      lv_obj_t* obj = focusableObjects[i][j];
+      
+      // Style for focused state - highlight with blue border or outline
+      lv_obj_set_style_border_color(obj, lv_color_hex(0x2196F3), LV_STATE_FOCUSED);  // Blue border
+      lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED);                       // Thicker border when focused
+      lv_obj_set_style_border_opa(obj, 255, LV_STATE_FOCUSED);                       // Full opacity
+      
+      // Optional: You can also change the background color slightly
+      lv_obj_set_style_bg_color(obj, lv_color_hex(0x808080), LV_STATE_FOCUSED);     // Darker background
+      
+      // Enable focus tracking on the object
+      lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     }
   }
+}
 
 void toggleAdjustmentPrecision() {
   fineAdjustmentMode = !fineAdjustmentMode;
@@ -142,10 +142,12 @@ void setupFocusableObjects() {
   static lv_obj_t* mainScreenObjects[] = {
     objects.move_steps,
     objects.manual_jog,
-    objects.continuous
+    objects.continuous,
+    objects.auto_button,
+    objects.settings_button
   };
   focusableObjects[0] = mainScreenObjects;
-  focusableObjectsCount[0] = 3;
+  focusableObjectsCount[0] = 5;
   
   // Move steps screen
   static lv_obj_t* moveStepsScreenObjects[] = {
@@ -176,6 +178,37 @@ void setupFocusableObjects() {
   };
   focusableObjects[3] = continuousRotationScreenObjects;
   focusableObjectsCount[3] = 4;
+  
+  // Sequence screen
+  static lv_obj_t* sequenceScreenObjects[] = {
+    objects.back_4,
+    objects.continuous_rotation_start_button_1,
+    objects.sequence_positions_button,
+    objects.sequence_speed_button,
+    objects.sequence_direction_button
+  };
+  focusableObjects[4] = sequenceScreenObjects;
+  focusableObjectsCount[4] = 5;
+  
+  // Sequence positions screen
+  static lv_obj_t* sequencePositionsScreenObjects[] = {
+    objects.back_5,
+    objects.sequence_position_0_button,
+    objects.sequence_position_1_button,
+    objects.sequence_position_2_button,
+    objects.sequence_position_3_button
+  };
+  focusableObjects[5] = sequencePositionsScreenObjects;
+  focusableObjectsCount[5] = 5;
+  
+  // Settings screen
+  static lv_obj_t* settingsScreenObjects[] = {
+    objects.back_3,
+    objects.acceleration_button,
+    objects.microstepping_button
+  };
+  focusableObjects[6] = settingsScreenObjects;
+  focusableObjectsCount[6] = 3;
 }
 
 void handleEncoder() {
@@ -243,31 +276,6 @@ void handleEncoder() {
   }
 }
 
-void setFocus(lv_obj_t* obj) {
-  // Remove focus from all objects
-  for (int i = 0; i < focusableObjectsCount[currentScreenIndex]; i++) {
-    lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
-  }
-  
-  // Set focus on new object
-  lv_obj_add_state(obj, LV_STATE_FOCUSED);
-}
-
-void navigateUI(int8_t direction) {
-  // Update focus index
-  currentFocusIndex += direction;
-  
-  // Handle wrapping
-  if (currentFocusIndex < 0) {
-    currentFocusIndex = focusableObjectsCount[currentScreenIndex] - 1;
-  } else if (currentFocusIndex >= focusableObjectsCount[currentScreenIndex]) {
-    currentFocusIndex = 0;
-  }
-  
-  // Focus the new object
-  setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-}
-
 void selectCurrentItem() {
   lv_obj_t *currentObj = focusableObjects[currentScreenIndex][currentFocusIndex];
   
@@ -294,6 +302,9 @@ void selectCurrentItem() {
   }
   else if (currentScreenIndex == 3) { // Continuous Rotation Page
       isAdjustableValue = (currentObj == objects.continuous_rotation_speed_button);
+  }
+  else if (currentScreenIndex == 4) { // Sequence Page
+      isAdjustableValue = (currentObj == objects.sequence_speed_button);
   }
   
   // If this is an adjustable value, enter adjustment mode
@@ -348,14 +359,73 @@ void selectCurrentItem() {
       delay(SCREEN_POST_RENDER_DELAY_MS);
       
       setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+    } else if (currentObj == objects.auto_button) {
+      loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+      currentScreenIndex = 4;
+      currentFocusIndex = 0;
+      
+      // Give LVGL time to load the screen and apply styles
+      delay(SCREEN_PRE_RENDER_DELAY_MS);
+      lv_timer_handler(); // Process any pending LVGL tasks
+      delay(SCREEN_POST_RENDER_DELAY_MS);
+      
+      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+    } else if (currentObj == objects.settings_button) {
+      loadScreen(SCREEN_ID_SETTINGS_PAGE);
+      currentScreenIndex = 6;
+      currentFocusIndex = 0;
+      
+      // Give LVGL time to load the screen and apply styles
+      delay(SCREEN_PRE_RENDER_DELAY_MS);
+      lv_timer_handler(); // Process any pending LVGL tasks
+      delay(SCREEN_POST_RENDER_DELAY_MS);
+      
+      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
     }
+  } else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
+    // Handle navigation to sequence positions submenu
+    loadScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE);
+    currentScreenIndex = 5;
+    currentFocusIndex = 0;
+    
+    // Give LVGL time to load the screen and apply styles
+    delay(SCREEN_PRE_RENDER_DELAY_MS);
+    lv_timer_handler(); // Process any pending LVGL tasks
+    delay(SCREEN_POST_RENDER_DELAY_MS);
+    
+    setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
   } else {
     // Handle back buttons on sub-screens
     if ((currentScreenIndex == 1 && currentObj == objects.back) ||
         (currentScreenIndex == 2 && currentObj == objects.back_1) ||
-        (currentScreenIndex == 3 && currentObj == objects.back_2)) {
+        (currentScreenIndex == 3 && currentObj == objects.back_2) ||
+        (currentScreenIndex == 6 && currentObj == objects.back_3)) {
       loadScreen(SCREEN_ID_MAIN);
       currentScreenIndex = 0;
+      currentFocusIndex = 0;
+      
+      // Give LVGL time to load the screen and apply styles
+      delay(SCREEN_PRE_RENDER_DELAY_MS);
+      lv_timer_handler(); // Process any pending LVGL tasks
+      delay(SCREEN_POST_RENDER_DELAY_MS);
+      
+      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+    } else if (currentScreenIndex == 4 && currentObj == objects.back_4) {
+      // Go back from sequence screen to main
+      loadScreen(SCREEN_ID_MAIN);
+      currentScreenIndex = 0;
+      currentFocusIndex = 0;
+      
+      // Give LVGL time to load the screen and apply styles
+      delay(SCREEN_PRE_RENDER_DELAY_MS);
+      lv_timer_handler(); // Process any pending LVGL tasks
+      delay(SCREEN_POST_RENDER_DELAY_MS);
+      
+      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
+    } else if (currentScreenIndex == 5 && currentObj == objects.back_5) {
+      // Go back from sequence positions screen to sequence screen
+      loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+      currentScreenIndex = 4;
       currentFocusIndex = 0;
       
       // Give LVGL time to load the screen and apply styles
@@ -369,4 +439,29 @@ void selectCurrentItem() {
       lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
     }
   }
+}
+
+void setFocus(lv_obj_t* obj) {
+  // Remove focus from all objects
+  for (int i = 0; i < focusableObjectsCount[currentScreenIndex]; i++) {
+    lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
+  }
+  
+  // Set focus on new object
+  lv_obj_add_state(obj, LV_STATE_FOCUSED);
+}
+
+void navigateUI(int8_t direction) {
+  // Update focus index
+  currentFocusIndex += direction;
+  
+  // Handle wrapping
+  if (currentFocusIndex < 0) {
+    currentFocusIndex = focusableObjectsCount[currentScreenIndex] - 1;
+  } else if (currentFocusIndex >= focusableObjectsCount[currentScreenIndex]) {
+    currentFocusIndex = 0;
+  }
+  
+  // Focus the new object
+  setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
 }

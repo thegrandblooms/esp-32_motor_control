@@ -130,6 +130,13 @@ void on_manual_jog_speed_clicked();
 void on_continuous_rotation_start_clicked();
 void on_continuous_rotation_direction_clicked();
 void on_continuous_rotation_speed_clicked();
+void on_sequence_start_clicked();
+void on_sequence_positions_clicked();
+void on_sequence_speed_clicked();
+void on_sequence_direction_clicked();
+void on_sequence_position_clicked(int position);
+void on_settings_acceleration_clicked();
+void on_settings_microstepping_clicked();
 void on_back_clicked();
 
 //===============================================
@@ -419,6 +426,12 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.continuous) {
             loadScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE);
         }
+        else if (target == objects.auto_button) {
+            loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+        }
+        else if (target == objects.settings_button) {
+            loadScreen(SCREEN_ID_SETTINGS_PAGE);
+        }
         
         // Move Steps Page
         else if (target == objects.back) {
@@ -464,15 +477,66 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.continuous_rotation_speed_button) {
             on_continuous_rotation_speed_clicked();
         }
+        
+        // Sequence Page
+        else if (target == objects.back_4) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_MAIN);
+        }
+        else if (target == objects.continuous_rotation_start_button_1) {
+            on_sequence_start_clicked();
+        }
+        else if (target == objects.sequence_positions_button) {
+            loadScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE);
+        }
+        else if (target == objects.sequence_speed_button) {
+            on_sequence_speed_clicked();
+        }
+        else if (target == objects.sequence_direction_button) {
+            on_sequence_direction_clicked();
+        }
+        
+        // Sequence Positions Page
+        else if (target == objects.back_5) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_SEQUENCE_PAGE);
+        }
+        else if (target == objects.sequence_position_0_button) {
+            on_sequence_position_clicked(0);
+        }
+        else if (target == objects.sequence_position_1_button) {
+            on_sequence_position_clicked(1);
+        }
+        else if (target == objects.sequence_position_2_button) {
+            on_sequence_position_clicked(2);
+        }
+        else if (target == objects.sequence_position_3_button) {
+            on_sequence_position_clicked(3);
+        }
+        
+        // Settings Page
+        else if (target == objects.back_3) {
+            on_back_clicked();
+            loadScreen(SCREEN_ID_MAIN);
+        }
+        else if (target == objects.acceleration_button) {
+            on_settings_acceleration_clicked();
+        }
+        else if (target == objects.microstepping_button) {
+            on_settings_microstepping_clicked();
+        }
     }
 }
 
+// Function to attach event handlers to UI elements
 // Function to attach event handlers to UI elements
 void attach_event_handlers() {
     // Main Screen
     lv_obj_add_event_cb(objects.move_steps, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.manual_jog, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.auto_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.settings_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     
     // Move Steps Page
     lv_obj_add_event_cb(objects.back, ui_event_handler, LV_EVENT_CLICKED, NULL);
@@ -491,6 +555,25 @@ void attach_event_handlers() {
     lv_obj_add_event_cb(objects.continuous_rotation_start_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous_rotation_direction_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.continuous_rotation_speed_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Sequence Page
+    lv_obj_add_event_cb(objects.back_4, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.continuous_rotation_start_button_1, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_positions_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_speed_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_direction_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Sequence Positions Page
+    lv_obj_add_event_cb(objects.back_5, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_0_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_1_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_2_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_3_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    
+    // Settings Page
+    lv_obj_add_event_cb(objects.back_3, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.acceleration_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.microstepping_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
 }
 
 // Function to update UI labels based on current settings
@@ -718,6 +801,82 @@ void on_continuous_rotation_speed_clicked() {
 void on_back_clicked() {
     // Stop the motor when going back to main screen
     stopMotor();
+}
+
+// Sequence screen button handlers
+void on_sequence_start_clicked() {
+    // Toggle between start and stop for sequence mode
+    if (motorRunning) {
+        stopMotor();
+    } else {
+        // Start sequence execution logic will go here
+        Serial.println("Starting sequence mode");
+        // For now, just update UI
+        update_ui_labels();
+    }
+}
+
+void on_sequence_positions_clicked() {
+    // This is handled in the event handler by loading the positions screen
+    Serial.println("Opening sequence positions screen");
+}
+
+void on_sequence_speed_clicked() {
+    // For now, using a simple toggling behavior like the other screens
+    if (speedSetting >= 400) {
+        speedSetting = 100;
+    } else {
+        speedSetting += 100;
+    }
+    update_ui_labels();
+    Serial.print("Sequence speed set to: ");
+    Serial.println(speedSetting);
+}
+
+void on_sequence_direction_clicked() {
+    clockwiseDirection = !clockwiseDirection;
+    update_ui_labels();
+    Serial.print("Sequence direction changed to: ");
+    Serial.println(clockwiseDirection ? "clockwise" : "counterclockwise");
+}
+
+void on_sequence_position_clicked(int position) {
+    // This would open a dialog or set the current editing position
+    Serial.print("Editing sequence position ");
+    Serial.println(position);
+    // Implementation will vary based on how you want to handle sequence positions
+}
+
+// Settings screen button handlers
+void on_settings_acceleration_clicked() {
+    // Toggle through acceleration presets
+    Serial.println("Adjusting acceleration setting");
+    // Actual implementation will go here
+}
+
+void on_settings_microstepping_clicked() {
+    // Toggle through microstepping modes
+    Serial.println("Adjusting microstepping setting");
+    
+    #if USE_DRV8825_DRIVER
+    // Example implementation for DRV8825
+    int currentMode = driver.getMicrostepMode();
+    int newMode;
+    
+    // Cycle through common microstepping modes
+    switch(currentMode) {
+        case 1: newMode = 2; break;   // Full step -> Half step
+        case 2: newMode = 4; break;   // Half step -> Quarter step
+        case 4: newMode = 8; break;   // Quarter step -> Eighth step
+        case 8: newMode = 16; break;  // Eighth step -> Sixteenth step
+        case 16: newMode = 32; break; // Sixteenth -> Thirty-second step
+        case 32: default: newMode = 1; break; // Back to full step
+    }
+    
+    driver.setMicrostepMode(newMode);
+    Serial.print("Microstepping set to 1/");
+    Serial.println(newMode);
+    #endif
 }
 
 //===============================================
