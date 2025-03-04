@@ -67,7 +67,7 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 #define ROTATION_COARSE_ADJUST 5.0       // Coarse adjustment increment (5% of rotation)
 
 // Acceleration and timing
-#define DEFAULT_ACCELERATION 3200         // Steps per second per second
+#define DEFAULT_ACCELERATION 6400         // Steps per second per second
 #define ACCEL_MIN 400 // minimum acceleration in settings
 #define ACCEL_MAX 12800 // maximum acceleration in settings
 #define MOTOR_IDLE_TIMEOUT_MS 5000       // 5 seconds before motor power saving
@@ -293,6 +293,7 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
     float speedAdjustment = fineAdjustmentMode ? RPM_FINE_ADJUST : RPM_COARSE_ADJUST;
     float rotationAdjustment = fineAdjustmentMode ? ROTATION_FINE_ADJUST : ROTATION_COARSE_ADJUST;
     float accelAdjustment = fineAdjustmentMode ? 10 : 50; // Fine: 10 steps/s², Coarse: 50 steps/s²
+
     
     // Apply proper magnitude based on delta and sensitivity
     float speedDelta = delta * speedAdjustment;
@@ -364,23 +365,85 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         Serial.print(currentRPM);
         Serial.println(" RPM");
     }
+
+    // Acceleration adjustment
     else if (obj == objects.acceleration_button) {
         // Apply delta to acceleration
         accelerationSetting += accelDelta;
         
         // Apply bounds
         accelerationSetting = constrain(accelerationSetting, ACCEL_MIN, ACCEL_MAX);
-        
+
         // Apply setting to controller immediately for consistent behavior
         controller.setAcceleration(accelerationSetting);
         
         // Update the label
         char buffer[30];
-        snprintf(buffer, sizeof(buffer), "Accel: %d steps/s²", accelerationSetting);
+        snprintf(buffer, sizeof(buffer), "Accel: %d", accelerationSetting);
         lv_obj_t *label = lv_obj_get_child(obj, 0);
         if (label) {
             lv_label_set_text(label, buffer);
         }
+    }
+
+    // Microstepping adjustment
+    else if (obj == objects.microstepping_button) {
+        #if USE_DRV8825_DRIVER
+        // Get current microstepping mode
+        int currentMode = driver.getMicrostepMode();
+        int newMode = currentMode;
+        
+        // For microstepping, we just want to cycle through modes on each significant encoder change
+        // Only make changes when delta accumulates to a threshold
+        static int accumulatedDelta = 0;
+        accumulatedDelta += delta;
+        
+        // Threshold for changing microstepping (adjust as needed)
+        const int MICROSTEP_CHANGE_THRESHOLD = 2;
+        
+        if (accumulatedDelta >= MICROSTEP_CHANGE_THRESHOLD) {
+            // Cycle forward through modes
+            switch(currentMode) {
+                case 1: newMode = 2; break;
+                case 2: newMode = 4; break;
+                case 4: newMode = 8; break;
+                case 8: newMode = 16; break;
+                case 16: newMode = 32; break;
+                case 32: newMode = 1; break;
+                default: newMode = DEFAULT_MICROSTEP_MODE; break;
+            }
+            accumulatedDelta = 0;
+        }
+        else if (accumulatedDelta <= -MICROSTEP_CHANGE_THRESHOLD) {
+            // Cycle backward through modes
+            switch(currentMode) {
+                case 1: newMode = 32; break;
+                case 2: newMode = 1; break;
+                case 4: newMode = 2; break;
+                case 8: newMode = 4; break;
+                case 16: newMode = 8; break;
+                case 32: newMode = 16; break;
+                default: newMode = DEFAULT_MICROSTEP_MODE; break;
+            }
+            accumulatedDelta = 0;
+        }
+        
+        // Only update if we're actually changing the mode
+        if (newMode != currentMode) {
+            driver.setMicrostepMode(newMode);
+            
+            // Update the label
+            char buffer[20];
+            snprintf(buffer, sizeof(buffer), "Microstep: 1/%d", newMode);
+            lv_obj_t *label = lv_obj_get_child(obj, 0);
+            if (label) {
+                lv_label_set_text(label, buffer);
+            }
+            
+            Serial.print("Microstepping adjusted to 1/");
+            Serial.println(newMode);
+        }
+        #endif
     }
 }
 
@@ -456,7 +519,6 @@ static void ui_event_handler(lv_event_t *e) {
             loadScreen(SCREEN_ID_SETTINGS_PAGE);
         }
         
-        // Move Steps Page
         else if (target == objects.back) {
             on_back_clicked();
             loadScreen(SCREEN_ID_MAIN);
@@ -612,7 +674,7 @@ void update_ui_labels() {
         lv_label_set_text(direction_label, clockwiseDirection ? "Clockwise" : "Counter-CW");
     }
     
-    // Update step number button label - now showing as % of rotation
+    // Update step number button label - showing as % of rotation
     lv_obj_t *steps_label = lv_obj_get_child(objects.step_num, 0);
     if (steps_label) {
         char buffer[20];
@@ -624,7 +686,6 @@ void update_ui_labels() {
     // Calculate RPM from current speed setting
     float rpm = stepsToRPM(speedSetting, gearRatio);
     
-    // Update speed button labels - now showing as RPM
     lv_obj_t *speed_label = lv_obj_get_child(objects.speed, 0);
     if (speed_label) {
         char buffer[20];
@@ -646,7 +707,6 @@ void update_ui_labels() {
         lv_label_set_text(speed_cont_label, buffer);
     }
     
-    // Update start button labels based on motor state
     lv_obj_t *start_label = lv_obj_get_child(objects.start, 0);
     if (start_label) {
         lv_label_set_text(start_label, motorRunning ? "Stop" : "Start");
@@ -661,12 +721,23 @@ void update_ui_labels() {
     if (start_cont_label) {
         lv_label_set_text(start_cont_label, motorRunning ? "Stop" : "Start");
     }
+
     lv_obj_t *accel_label = lv_obj_get_child(objects.acceleration_button, 0);
     if (accel_label) {
         char buffer[30];
-        snprintf(buffer, sizeof(buffer), "Acceleration");
+        snprintf(buffer, sizeof(buffer), "Accel: %d", accelerationSetting);
         lv_label_set_text(accel_label, buffer);
     }
+    
+    #if USE_DRV8825_DRIVER
+    lv_obj_t *microstepping_label = lv_obj_get_child(objects.microstepping_button, 0);
+    if (microstepping_label) {
+        int currentMode = driver.getMicrostepMode();
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Microstep: 1/%d", currentMode);
+        lv_label_set_text(microstepping_label, buffer);
+    }
+    #endif
 }
 
 //===============================================
@@ -830,6 +901,20 @@ void on_continuous_rotation_speed_clicked() {
 void on_back_clicked() {
     // Stop the motor when going back to main screen
     stopMotor();
+    // If coming from settings page, make sure to update values
+    if (currentScreenIndex == 6) { // Settings page
+        // Recalculate speed and steps based on current user-friendly values
+        // This accounts for microstepping changes
+        float currentRPM = stepsToRPM(speedSetting, gearRatio);
+        float currentRotationPercent = stepsToRotationPercent(targetSteps, gearRatio);
+        
+        // Update internal values with new microstepping factor
+        speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
+        targetSteps = rotationPercentToSteps(currentRotationPercent, gearRatio);
+        
+        // Update UI to reflect potentially changed values
+        update_ui_labels();
+    }
 }
 
 // Sequence screen button handlers
@@ -902,35 +987,51 @@ void on_settings_acceleration_clicked() {
     
     // Update the button text
     char buffer[30];
-    snprintf(buffer, sizeof(buffer), "Accel: %d steps/s", accelerationSetting);
+    snprintf(buffer, sizeof(buffer), "Accel: %d", accelerationSetting);
     lv_obj_t *label = lv_obj_get_child(objects.acceleration_button, 0);
     if (label) {
         lv_label_set_text(label, buffer);
     }
 }
 
-void on_settings_microstepping_clicked() {
-    // Toggle through microstepping modes
-    Serial.println("Adjusting microstepping setting");
-    
+void update_microstepping_label() {
+    // Only applicable for DRV8825 driver
     #if USE_DRV8825_DRIVER
-    // Example implementation for DRV8825
+    // Get current microstepping mode
     int currentMode = driver.getMicrostepMode();
-    int newMode;
     
-    // Cycle through common microstepping modes
-    switch(currentMode) {
-        case 1: newMode = 2; break;   // Full step -> Half step
-        case 2: newMode = 4; break;   // Half step -> Quarter step
-        case 4: newMode = 8; break;   // Quarter step -> Eighth step
-        case 8: newMode = 16; break;  // Eighth step -> Sixteenth step
-        case 16: newMode = 32; break; // Sixteenth -> Thirty-second step
-        case 32: default: newMode = 1; break; // Back to full step
+    // Update the label on the microstepping button
+    lv_obj_t *microstepping_label = lv_obj_get_child(objects.microstepping_button, 0);
+    if (microstepping_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Microstep: 1/%d", currentMode);
+        lv_label_set_text(microstepping_label, buffer);
     }
-    
-    driver.setMicrostepMode(newMode);
-    Serial.print("Microstepping set to 1/");
-    Serial.println(newMode);
+    #endif
+}
+
+// Enhanced microstepping button handler
+void on_settings_microstepping_clicked() {
+    // The actual adjustment is now handled through the encoder in value adjustment mode
+    // This is just needed for direct button click handling if not using the encoder
+    #if USE_DRV8825_DRIVER
+    if (!valueAdjustmentMode) {  // Only act on direct click if not in adjustment mode
+        int currentMode = driver.getMicrostepMode();
+        int newMode;
+        
+        // Cycle through microstepping modes
+        switch(currentMode) {
+            case 1: newMode = 2; break;
+            case 2: newMode = 4; break;
+            case 4: newMode = 8; break;
+            case 8: newMode = 16; break;
+            case 16: newMode = 32; break;
+            case 32: default: newMode = DEFAULT_MICROSTEP_MODE; break;
+        }
+        
+        driver.setMicrostepMode(newMode);
+        update_ui_labels();
+    }
     #endif
 }
 
@@ -940,7 +1041,6 @@ void on_settings_microstepping_clicked() {
 void setup() {
     // Initialize serial communication
     Serial.begin(115200);
-    Serial.println("Stepper Motor Controller - Hardware Timer Version");
     
     // Initialize the display and UI
     LCD_Init();

@@ -291,7 +291,7 @@ void selectCurrentItem() {
       return;
   }
   
-  // Check if this is a value that can be adjusted (steps or speed buttons)
+  // Check if this is a value that can be adjusted
   bool isAdjustableValue = false;
   
   if (currentScreenIndex == 1) { // Move Steps Page
@@ -306,6 +306,10 @@ void selectCurrentItem() {
   else if (currentScreenIndex == 4) { // Sequence Page
       isAdjustableValue = (currentObj == objects.sequence_speed_button);
   }
+  else if (currentScreenIndex == 6) { // Settings Page
+    isAdjustableValue = (currentObj == objects.microstepping_button || 
+                          currentObj == objects.acceleration_button); 
+}
   
   // If this is an adjustable value, enter adjustment mode
   if (isAdjustableValue) {
