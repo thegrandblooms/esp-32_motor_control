@@ -1047,8 +1047,6 @@ void setup() {
     Set_Backlight(50); // Set LCD backlight to 50%
     Lvgl_Init();
     ui_init();
-
-    // Update UI labels with initial values
     update_ui_labels();
 
     // Attach event handlers to UI elements

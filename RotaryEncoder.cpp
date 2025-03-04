@@ -22,6 +22,7 @@ bool buttonPressed = false;
 extern bool valueAdjustmentMode;
 extern lv_obj_t *currentAdjustmentObject;
 extern int adjustmentSensitivity;
+extern void update_ui_labels();
 
 // Encoder state tracking
 volatile bool buttonCurrentlyPressed = false;
@@ -59,6 +60,27 @@ void setupFocusStyles() {
       lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     }
   }
+}
+
+// Function to handle screen transitions with UI refresh
+void transitionToScreen(enum ScreensEnum screenId, int8_t newScreenIndex, int8_t newFocusIndex) {
+  // Load the new screen
+  loadScreen(screenId);
+  
+  // Update the current indices
+  currentScreenIndex = newScreenIndex;
+  currentFocusIndex = newFocusIndex;
+  
+  // Wait for screen to load and refresh UI
+  delay(SCREEN_PRE_RENDER_DELAY_MS);
+  lv_timer_handler();  // Process any pending LVGL tasks
+  delay(SCREEN_POST_RENDER_DELAY_MS);
+  
+  // Update UI labels with current values
+  update_ui_labels();
+  
+  // Set focus on the first item
+  setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
 }
 
 void toggleAdjustmentPrecision() {
@@ -328,120 +350,34 @@ void selectCurrentItem() {
     lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
   }
   
-  // Handle navigation between screens based on the selected button
-  if (currentScreenIndex == 0) { // Main screen
-    if (currentObj == objects.move_steps) {
-      loadScreen(SCREEN_ID_MOVE_STEPS_PAGE);
-      currentScreenIndex = 1;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.manual_jog) {
-      loadScreen(SCREEN_ID_MANUAL_JOG_PAGE);
-      currentScreenIndex = 2;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.continuous) {
-      loadScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE);
-      currentScreenIndex = 3;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.auto_button) {
-      loadScreen(SCREEN_ID_SEQUENCE_PAGE);
-      currentScreenIndex = 4;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentObj == objects.settings_button) {
-      loadScreen(SCREEN_ID_SETTINGS_PAGE);
-      currentScreenIndex = 6;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    }
-  } else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
-    // Handle navigation to sequence positions submenu
-    loadScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE);
-    currentScreenIndex = 5;
-    currentFocusIndex = 0;
-    
-    // Give LVGL time to load the screen and apply styles
-    delay(SCREEN_PRE_RENDER_DELAY_MS);
-    lv_timer_handler(); // Process any pending LVGL tasks
-    delay(SCREEN_POST_RENDER_DELAY_MS);
-    
-    setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-  } else {
-    // Handle back buttons on sub-screens
-    if ((currentScreenIndex == 1 && currentObj == objects.back) ||
-        (currentScreenIndex == 2 && currentObj == objects.back_1) ||
-        (currentScreenIndex == 3 && currentObj == objects.back_2) ||
-        (currentScreenIndex == 6 && currentObj == objects.back_3)) {
-      loadScreen(SCREEN_ID_MAIN);
-      currentScreenIndex = 0;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentScreenIndex == 4 && currentObj == objects.back_4) {
-      // Go back from sequence screen to main
-      loadScreen(SCREEN_ID_MAIN);
-      currentScreenIndex = 0;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else if (currentScreenIndex == 5 && currentObj == objects.back_5) {
-      // Go back from sequence positions screen to sequence screen
-      loadScreen(SCREEN_ID_SEQUENCE_PAGE);
-      currentScreenIndex = 4;
-      currentFocusIndex = 0;
-      
-      // Give LVGL time to load the screen and apply styles
-      delay(SCREEN_PRE_RENDER_DELAY_MS);
-      lv_timer_handler(); // Process any pending LVGL tasks
-      delay(SCREEN_POST_RENDER_DELAY_MS);
-      
-      setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
-    } else {
-      // Simulate a button click event for other buttons
-      lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
-    }
+// Handle navigation between screens based on the selected button
+if (currentScreenIndex == 0) { // Main screen
+    if (currentObj == objects.move_steps) {transitionToScreen(SCREEN_ID_MOVE_STEPS_PAGE, 1, 0);} 
+    else if (currentObj == objects.manual_jog) {transitionToScreen(SCREEN_ID_MANUAL_JOG_PAGE, 2, 0);} 
+    else if (currentObj == objects.continuous) {transitionToScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE, 3, 0);} 
+    else if (currentObj == objects.auto_button) {transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);} 
+    else if (currentObj == objects.settings_button) {transitionToScreen(SCREEN_ID_SETTINGS_PAGE, 6, 0);}
+}
+
+else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
+  transitionToScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE, 5, 0);} // Handle navigation to sequence positions submenu
+  
+else {
+        // Handle back buttons on sub-screens
+        if ((currentScreenIndex == 1 && currentObj == objects.back) ||
+            (currentScreenIndex == 2 && currentObj == objects.back_1) ||
+            (currentScreenIndex == 3 && currentObj == objects.back_2) ||
+            (currentScreenIndex == 6 && currentObj == objects.back_3)) {
+          transitionToScreen(SCREEN_ID_MAIN, 0, 0);} 
+
+        // Go back from sequence screen to main
+        else if (currentScreenIndex == 4 && currentObj == objects.back_4) {transitionToScreen(SCREEN_ID_MAIN, 0, 0);}
+
+        // Go back from sequence positions screen to sequence screen
+        else if (currentScreenIndex == 5 && currentObj == objects.back_5) {transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);}
+
+        // Simulate a button click event for other buttons
+        else {lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);}
   }
 }
 
