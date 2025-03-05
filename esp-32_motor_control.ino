@@ -13,33 +13,6 @@
 #include "TimerStepperControl.h"
 
 //===============================================
-// DRIVER CONFIGURATION
-//===============================================
-// Set this to choose which driver to use
-#define USE_L298N_DRIVER  0  // Set to 1 to use L298N
-#define USE_DRV8825_DRIVER 1 // Set to 1 to use DRV8825
-
-// L298N Pin definitions
-#define L298N_PIN1 1      // Connected to IN1 on L298N
-#define L298N_PIN2 4      // Connected to IN2 on L298N
-#define L298N_PIN3 19     // Connected to IN3 on L298N
-#define L298N_PIN4 20     // Connected to IN4 on L298N
-#define L298N_ENABLE_A 18 // Connected to ENA on L298N
-#define L298N_ENABLE_B 23 // Connected to ENB on L298N
-
-// DRV8825 Pin definitions
-#define DRV8825_ENABLE_PIN 9  // Enable pin
-#define DRV8825_M0_PIN 18      // Microstep mode 0
-#define DRV8825_M1_PIN 19      // Microstep mode 1
-#define DRV8825_M2_PIN 20       // Microstep mode 2
-#define DRV8825_SLEEP_RESET_PIN 23 // GPIO23 controls both SLEEP and RESET
-#define DRV8825_STEP_PIN 12        // STEP
-#define DRV8825_DIR_PIN 13         // Direction
-#define DRV8825_SLEEP_PIN -1   // Optional - connect if needed
-#define DRV8825_RESET_PIN -1   // Optional - connect if needed
-#define DRV8825_FAULT_PIN -1   // Optional - connect if needed
-
-//===============================================
 // MOTOR CONFIGURATION
 //===============================================
 // Base motor characteristics
@@ -52,7 +25,7 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 //===============================================
 // Speed limits in RPM (at the output shaft after gearing)
 #define MIN_RPM 0.1                      // Minimum speed in RPM
-#define MAX_RPM 60.0                     // Maximum speed in RPM
+#define MAX_RPM 30.0                     // Maximum speed in RPM
 #define DEFAULT_RPM 5.0                  // Default starting speed in RPM
 #define RPM_FINE_ADJUST 0.1              // Fine adjustment increment in RPM
 #define RPM_COARSE_ADJUST 1.0            // Coarse adjustment increment in RPM
@@ -85,8 +58,32 @@ bool encoderJogMode = false;
 long lastJogEncoderValue = 0;            // Track encoder position for jog mode
 
 //===============================================
-// GLOBAL VARIABLES
+// DRIVER CONFIGURATION
 //===============================================
+// Set this to choose which driver to use
+#define USE_L298N_DRIVER  0  // Set to 1 to use L298N
+#define USE_DRV8825_DRIVER 1 // Set to 1 to use DRV8825
+
+// L298N Pin definitions
+#define L298N_PIN1 1      // Connected to IN1 on L298N
+#define L298N_PIN2 4      // Connected to IN2 on L298N
+#define L298N_PIN3 19     // Connected to IN3 on L298N
+#define L298N_PIN4 20     // Connected to IN4 on L298N
+#define L298N_ENABLE_A 18 // Connected to ENA on L298N
+#define L298N_ENABLE_B 23 // Connected to ENB on L298N
+
+// DRV8825 Pin definitions
+#define DRV8825_ENABLE_PIN 9  // Enable pin
+#define DRV8825_M0_PIN 18      // Microstep mode 0
+#define DRV8825_M1_PIN 19      // Microstep mode 1
+#define DRV8825_M2_PIN 20       // Microstep mode 2
+#define DRV8825_SLEEP_RESET_PIN 23 // GPIO23 controls both SLEEP and RESET
+#define DRV8825_STEP_PIN 12        // STEP
+#define DRV8825_DIR_PIN 13         // Direction
+#define DRV8825_SLEEP_PIN -1   // Optional - connect if needed
+#define DRV8825_RESET_PIN -1   // Optional - connect if needed
+#define DRV8825_FAULT_PIN -1   // Optional - connect if needed
+
 // Create the appropriate driver and controller
 #if USE_L298N_DRIVER
     L298NDriver driver(L298N_PIN1, L298N_PIN2, L298N_PIN3, L298N_PIN4, L298N_ENABLE_A, L298N_ENABLE_B);
@@ -98,6 +95,9 @@ long lastJogEncoderValue = 0;            // Track encoder position for jog mode
     #error "No driver selected! Set either USE_L298N_DRIVER or USE_DRV8825_DRIVER to 1"
 #endif
 
+//===============================================
+// GLOBAL VARIABLES
+//===============================================
 // Create the timer-based controller with the selected driver
 TimerStepperControl controller(&driver);
 
@@ -107,6 +107,7 @@ bool continuousMode = false;
 bool clockwiseDirection = true;
 bool enableMotorPowerSave = true;
 bool fineAdjustmentMode = true;          // Toggle between fine/coarse adjustment
+bool ultraFineAdjustmentMode = false;  // For 0.01% precision adjustments
 
 // Current settings (these get converted to/from user-friendly units)
 int targetSteps;                         // Target steps to move
@@ -363,6 +364,19 @@ void checkEncoderJogMode() {
     }
 }
 
+// Function to calculate maximum RPM based on current microstepping
+float getMaxRpmForCurrentMicrostepping() {
+    int microstepMode = driver.getMicrostepMode();
+    float maxStepsPerSec = 4000.0f; // Based on 0.25ms timer
+    int effectiveStepsPerRev = BASE_STEPS_PER_REVOLUTION * microstepMode * gearRatio;
+    
+    // Calculate theoretical max based on timer frequency
+    float theoreticalMax = (maxStepsPerSec * 60.0f) / effectiveStepsPerRev;
+    
+    // Return the lower of the theoretical max or hardware MAX_RPM
+    return min(theoreticalMax, (float)MAX_RPM);
+}
+
 //===============================================
 // UI FUNCTIONS
 //===============================================
@@ -408,18 +422,22 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         Serial.print(currentPercent);
         Serial.println("%");
     }
-    else if (obj == objects.speed || obj == objects.speed_manual_jog || obj == objects.continuous_rotation_speed_button) {
-        // Work with RPM instead of steps/second
-        float currentRPM = stepsToRPM(speedSetting, gearRatio);
-        
-        // Apply delta to RPM
-        currentRPM += speedDelta;
-        
-        // Apply bounds
-        if (currentRPM < MIN_RPM) {
+        // Then modify the adjustValueByEncoder function:
+        else if (obj == objects.speed || obj == objects.speed_manual_jog || 
+            obj == objects.continuous_rotation_speed_button ||
+            obj == objects.sequence_speed_button) {
+            // Work with RPM instead of steps/second
+            float currentRPM = stepsToRPM(speedSetting, gearRatio);
+
+            // Apply delta to RPM
+            currentRPM += speedDelta;
+
+            // Apply bounds with dynamic max
+            float dynamicMaxRpm = getMaxRpmForCurrentMicrostepping();
+            if (currentRPM < MIN_RPM) {
             currentRPM = MIN_RPM;
-        } else if (currentRPM > MAX_RPM) {
-            currentRPM = MAX_RPM;
+            } else if (currentRPM > dynamicMaxRpm) {
+            currentRPM = dynamicMaxRpm;
         }
         
         // Convert back to steps/second
@@ -440,10 +458,6 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
             cmd.speed = speedSetting;
             controller.sendCommand(&cmd);
         }
-        
-        Serial.print("Speed adjusted to: ");
-        Serial.print(currentRPM);
-        Serial.println(" RPM");
     }
 
     // Acceleration adjustment
@@ -781,6 +795,13 @@ void update_ui_labels() {
         lv_label_set_text(speed_cont_label, buffer);
     }
     
+    lv_obj_t *seq_speed_label = lv_obj_get_child(objects.sequence_speed_button, 0);
+    if (seq_speed_label) {
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Speed: %.1f RPM", rpm);
+        lv_label_set_text(seq_speed_label, buffer);
+    }
+
     lv_obj_t *start_label = lv_obj_get_child(objects.start, 0);
     if (start_label) {
         lv_label_set_text(start_label, motorRunning ? "Stop" : "Start");
