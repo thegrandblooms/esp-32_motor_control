@@ -24,6 +24,8 @@ extern lv_obj_t *currentAdjustmentObject;
 extern int adjustmentSensitivity;
 extern bool fineAdjustmentMode;
 extern volatile bool longPressDetected;
+extern bool ultraFineAdjustmentMode;
+extern int currentPositionBeingAdjusted;
 
 // Function declarations - make sure these are declared here
 void adjustValueByEncoder(lv_obj_t* obj, int delta);

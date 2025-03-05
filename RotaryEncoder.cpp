@@ -84,18 +84,42 @@ void transitionToScreen(enum ScreensEnum screenId, int8_t newScreenIndex, int8_t
 }
 
 void toggleAdjustmentPrecision() {
-  fineAdjustmentMode = !fineAdjustmentMode;
+  // For sequence positions, toggle between fine and ultra-fine only
+  if (currentPositionBeingAdjusted >= 0) {
+    // Just toggle between ultra-fine and fine
+    ultraFineAdjustmentMode = !ultraFineAdjustmentMode;
+    
+    // Always keep fineAdjustmentMode true for sequence positions
+    // This prevents it from ever entering coarse mode
+    fineAdjustmentMode = true;
+  } else {
+    // For other adjustments, toggle between fine and coarse as before
+    fineAdjustmentMode = !fineAdjustmentMode;
+    // Make sure ultra-fine is off for non-sequence adjustments
+    ultraFineAdjustmentMode = false;
+  }
   
   // Show feedback
   showModeChangeIndicator();
   
   Serial.print("Switched to ");
-  Serial.println(fineAdjustmentMode ? "fine adjustment mode" : "coarse adjustment mode");
+  if (ultraFineAdjustmentMode) {
+    Serial.println("ultra-fine adjustment mode (0.01%)");
+  } else if (fineAdjustmentMode) {
+    Serial.println("fine adjustment mode");
+  } else {
+    Serial.println("coarse adjustment mode");
+  }
 }
 
 void showModeChangeIndicator() {
-  // For now, just print to serial
-  Serial.println(fineAdjustmentMode ? "MODE: FINE ADJUSTMENT" : "MODE: COARSE ADJUSTMENT");
+  if (ultraFineAdjustmentMode) {
+    Serial.println("MODE: ULTRA-FINE ADJUSTMENT (0.01%)");
+  } else if (fineAdjustmentMode) {
+    Serial.println("MODE: FINE ADJUSTMENT");
+  } else {
+    Serial.println("MODE: COARSE ADJUSTMENT");
+  }
 }
 
 void IRAM_ATTR handleEncoderInterrupt() {
@@ -361,7 +385,7 @@ if (currentScreenIndex == 0) { // Main screen
 
 else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
   transitionToScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE, 5, 0);} // Handle navigation to sequence positions submenu
-  
+
 else {
         // Handle back buttons on sub-screens
         if ((currentScreenIndex == 1 && currentObj == objects.back) ||

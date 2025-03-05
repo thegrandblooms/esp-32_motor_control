@@ -542,12 +542,20 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
     
     // Check if we're adjusting a sequence position
     else if (currentPositionBeingAdjusted >= 0 && currentPositionBeingAdjusted < 4) {
-        // Determine adjustment size based on fine/coarse mode
-        float adjustment = fineAdjustmentMode ? 1.0 : 5.0;
+        // Determine adjustment size based on mode
+        float adjustment;
+        
+        if (ultraFineAdjustmentMode) {
+          adjustment = 0.01; // Ultra-fine: 0.01% increments
+        } else if (fineAdjustmentMode) {
+          adjustment = 1.0;  // Fine: 1% increments
+        } else {
+          adjustment = 5.0;  // Coarse: 5% increments
+        }
         
         // Apply adjustment
         float newValue = sequenceData.positions[currentPositionBeingAdjusted] + 
-                         (delta * adjustment);
+                        (delta * adjustment);
         
         // Apply bounds
         newValue = constrain(newValue, 0.0, 100.0);
@@ -555,10 +563,15 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         // Store the new value
         sequenceData.positions[currentPositionBeingAdjusted] = newValue;
         
-        // Update the label
-        char buffer[20];
-        snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                 currentPositionBeingAdjusted, newValue);
+        // Update the label - use more decimal places in ultra-fine mode
+        char buffer[25];
+        if (ultraFineAdjustmentMode) {
+          snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
+                  currentPositionBeingAdjusted, newValue);
+        } else {
+          snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                  currentPositionBeingAdjusted, newValue);
+        }
                  
         // Update the button label
         lv_obj_t *posButton;
@@ -1313,13 +1326,26 @@ void updateSequencePositionLabels() {
         lv_obj_t *label = lv_obj_get_child(posButtons[i], 0);
         if (label) {
             char buffer[25];
-            if (i == 0) {
-                snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
-                         sequenceData.positions[i]);
+            
+            // Show more decimal places if we're in ultra-fine mode
+            if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
+                if (i == 0) {
+                    snprintf(buffer, sizeof(buffer), "Ref: %.2f%%", 
+                            sequenceData.positions[i]);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
+                            i, sequenceData.positions[i]);
+                }
             } else {
-                snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                         i, sequenceData.positions[i]);
+                if (i == 0) {
+                    snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
+                            sequenceData.positions[i]);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                            i, sequenceData.positions[i]);
+                }
             }
+            
             lv_label_set_text(label, buffer);
         }
     }
