@@ -1162,121 +1162,95 @@ void on_settings_microstepping_clicked() {
 //===============================================
 // Calculate and execute the next position movement
 void moveToNextSequencePosition() {
-    // Print our starting state
-    Serial.println("------ Starting moveToNextSequencePosition ------");
-    Serial.print("Current step before increment: ");
-    Serial.println(sequenceData.currentStep);
-    
-    // Increment step counter
+    // Increment the step counter
     sequenceData.currentStep++;
-    
-    Serial.print("Current step after increment: ");
-    Serial.println(sequenceData.currentStep);
     
     // Check if we've reached the end
     if (sequenceData.currentStep > 3) {
-        Serial.println("Reached end of sequence, stopping");
-        stopSequence();
-        return;
+        if (sequenceData.loopSequence) {
+            sequenceData.currentStep = 1;  // Loop back to position 1
+        } else {
+            stopSequence();
+            return;
+        }
     }
     
-    // Get source and target positions EXPLICITLY
-    float sourcePosition = 0;
-    float targetPosition = 0;
+    // Determine source and target positions
+    float sourcePosition, targetPosition;
     
     if (sequenceData.currentStep == 1) {
-        sourcePosition = sequenceData.positions[0]; // Reference
-        targetPosition = sequenceData.positions[1]; // Position 1
-        Serial.println("Moving from reference to position 1");
-    } 
-    else if (sequenceData.currentStep == 2) {
-        sourcePosition = sequenceData.positions[1]; // Position 1
-        targetPosition = sequenceData.positions[2]; // Position 2
-        Serial.println("Moving from position 1 to position 2");
-    }
-    else { // currentStep == 3
-        sourcePosition = sequenceData.positions[2]; // Position 2
-        targetPosition = sequenceData.positions[3]; // Position 3
-        Serial.println("Moving from position 2 to position 3");
+        // First move - from reference to position 1
+        sourcePosition = sequenceData.positions[0];
+        targetPosition = sequenceData.positions[1];
+    } else if (sequenceData.currentStep == 2) {
+        // Second move - from position 1 to position 2
+        sourcePosition = sequenceData.positions[1];
+        targetPosition = sequenceData.positions[2];
+    } else { // currentStep == 3
+        // Third move - from position 2 to position 3
+        sourcePosition = sequenceData.positions[2];
+        targetPosition = sequenceData.positions[3];
     }
     
-    Serial.print("Source position: ");
-    Serial.print(sourcePosition);
-    Serial.print("%, Target position: ");
-    Serial.println(targetPosition);
-    
-    // Determine the EXPLICIT direction - TESTING FORCED DIRECTIONS
-    bool moveClockwise = false;
-    
-    // CRITICAL DEBUG: Let's hard-code the directions to match exactly what we want:
+    // Determine direction based on the step number
+    bool moveClockwise;
     if (sequenceData.currentStep == 1) {
-        moveClockwise = true;  // Force CW for first move
-        Serial.println("FORCED direction for step 1: CW");
-    } 
-    else if (sequenceData.currentStep == 2) {
-        moveClockwise = false; // Force CCW for second move
-        Serial.println("FORCED direction for step 2: CCW");
-    }
-    else { // currentStep == 3
-        moveClockwise = true;  // Force CW for third move
-        Serial.println("FORCED direction for step 3: CW");
+        // First move: Use configured direction
+        moveClockwise = sequenceData.initialDirection;
+    } else if (sequenceData.currentStep == 2) {
+        // Second move: Opposite of configured direction
+        moveClockwise = !sequenceData.initialDirection;
+    } else { // currentStep == 3
+        // Third move: Same as configured direction 
+        moveClockwise = sequenceData.initialDirection;
     }
     
     // Calculate movement percentage
-    float movementPercent = 0;
+    float movementPercent;
     
-    // Simplified calculation for clarity
-    if (moveClockwise) {
-        if (targetPosition >= sourcePosition) {
-            // Simple case: going forward
-            movementPercent = targetPosition - sourcePosition;
-            Serial.println("CW forward calculation");
-        } else {
-            // Wrap-around case: going through 100/0
-            movementPercent = (100 - sourcePosition) + targetPosition;
-            Serial.println("CW wrap calculation");
-        }
-    } else {
-        if (targetPosition <= sourcePosition) {
-            // Simple case: going backward
-            movementPercent = sourcePosition - targetPosition;
-            Serial.println("CCW backward calculation");
-        } else {
-            // Wrap-around case: going through 0/100
-            movementPercent = sourcePosition + (100 - targetPosition);
-            Serial.println("CCW wrap calculation");
-        }
-    }
-    
-    // Handle same-position case
+    // Handle same-position case (full rotation)
     if (abs(targetPosition - sourcePosition) < 0.1) {
         movementPercent = 100.0;
-        Serial.println("Same position - full rotation");
+    }
+    // Calculate movement based on direction and positions
+    else if (moveClockwise) {
+        // For clockwise movement
+        if (targetPosition > sourcePosition) {
+            movementPercent = targetPosition - sourcePosition;
+        } else {
+            movementPercent = (100 - sourcePosition) + targetPosition;
+        }
+    } else {
+        // For counter-clockwise movement
+        if (targetPosition < sourcePosition) {
+            movementPercent = sourcePosition - targetPosition;
+        } else {
+            movementPercent = sourcePosition + (100 - targetPosition);
+        }
     }
     
-    Serial.print("Movement percentage: ");
-    Serial.println(movementPercent);
-    
-    // Calculate steps
+    // Calculate steps to move
     int stepsToMove = rotationPercentToSteps(movementPercent, gearRatio);
     
-    // CRITICAL - THIS MIGHT BE THE ISSUE
-    // Is the motor controller interpreting direction opposite to our expectations?
-    // Let's try inverting the sign
-    
+    // CRITICAL: The sign is inverted for this motor setup
     MotorCommand_t cmd;
     cmd.cmd_type = CMD_MOVE_STEPS;
-    
-    // Try inverting the sign - this is our debug attempt
     cmd.position = moveClockwise ? -stepsToMove : stepsToMove;
-    
-    Serial.print("Motor command direction: ");
-    Serial.println(cmd.position > 0 ? "CCW" : "CW");
-    
     cmd.speed = sequenceData.speedSetting;
     controller.sendCommand(&cmd);
     
-    Serial.println("------ Finished moveToNextSequencePosition ------");
+    // Logging for monitoring
+    Serial.print("Sequence step ");
+    Serial.print(sequenceData.currentStep);
+    Serial.print(": ");
+    Serial.print(sourcePosition);
+    Serial.print("% -> ");
+    Serial.print(targetPosition);
+    Serial.print("%, moving ");
+    Serial.print(movementPercent);
+    Serial.print("% ");
+    Serial.print(moveClockwise ? "CW" : "CCW");
+    Serial.println();
 }
 
 void startSequence() {
