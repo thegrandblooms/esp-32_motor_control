@@ -23,6 +23,9 @@ extern bool valueAdjustmentMode;
 extern lv_obj_t *currentAdjustmentObject;
 extern int adjustmentSensitivity;
 extern void update_ui_labels();
+lv_obj_t *precision_indicator = NULL;
+lv_timer_t *precision_indicator_timer = NULL;
+const uint32_t PRECISION_INDICATOR_DURATION_MS = 1000;  // 1 second
 
 // Encoder state tracking
 volatile bool buttonCurrentlyPressed = false;
@@ -62,8 +65,24 @@ void setupFocusStyles() {
   }
 }
 
+void resetPrecisionIndicator() {
+  // Remove any existing indicator and timer
+  if (precision_indicator != NULL) {
+      lv_obj_del(precision_indicator);
+      precision_indicator = NULL;
+  }
+  
+  if (precision_indicator_timer != NULL) {
+      lv_timer_del(precision_indicator_timer);
+      precision_indicator_timer = NULL;
+  }
+}
+
 // Function to handle screen transitions with UI refresh
 void transitionToScreen(enum ScreensEnum screenId, int8_t newScreenIndex, int8_t newFocusIndex) {
+  // Reset any active precision indicator
+  resetPrecisionIndicator();
+  
   // Load the new screen
   loadScreen(screenId);
   
@@ -83,6 +102,55 @@ void transitionToScreen(enum ScreensEnum screenId, int8_t newScreenIndex, int8_t
   setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);
 }
 
+void showPrecisionIndicator() {
+  // Always recreate the indicator on the current screen
+  if (precision_indicator != NULL) {
+      lv_obj_del(precision_indicator);  // Delete the old indicator
+      precision_indicator = NULL;
+  }
+  
+  // Create a new indicator on the current screen
+  precision_indicator = lv_label_create(lv_scr_act());
+  
+  // Set it to the highest Z-index to stay on top
+  lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_opa(precision_indicator, 180, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(precision_indicator, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(precision_indicator, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_pad_all(precision_indicator, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(precision_indicator, LV_ALIGN_BOTTOM_MID, 0, -10);
+  
+  // Make sure it stays on top
+  lv_obj_move_foreground(precision_indicator);
+  
+  // Set the text based on the current mode
+  if (ultraFineAdjustmentMode) {
+      lv_label_set_text(precision_indicator, "ULTRA-FINE (0.01%)");
+      lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0x0000FF), LV_PART_MAIN | LV_STATE_DEFAULT); // Blue
+  } else if (fineAdjustmentMode) {
+      lv_label_set_text(precision_indicator, "FINE ADJUSTMENT");
+      lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0x00AA00), LV_PART_MAIN | LV_STATE_DEFAULT); // Green
+  } else {
+      lv_label_set_text(precision_indicator, "COARSE ADJUSTMENT");
+      lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0xFF6600), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange
+  }
+
+  // If timer exists, delete it
+  if (precision_indicator_timer != NULL) {
+      lv_timer_del(precision_indicator_timer);
+      precision_indicator_timer = NULL;
+  }
+  
+  // Create timer to hide the indicator after a delay
+  precision_indicator_timer = lv_timer_create([](lv_timer_t * timer) {
+      if (precision_indicator != NULL) {
+          lv_obj_del(precision_indicator);  // Delete rather than hide
+          precision_indicator = NULL;
+      }
+      precision_indicator_timer = NULL;
+  }, PRECISION_INDICATOR_DURATION_MS, NULL);
+}
+
 void toggleAdjustmentPrecision() {
   // For sequence positions, toggle between fine and ultra-fine only
   if (currentPositionBeingAdjusted >= 0) {
@@ -100,26 +168,7 @@ void toggleAdjustmentPrecision() {
   }
   
   // Show feedback
-  showModeChangeIndicator();
-  
-  Serial.print("Switched to ");
-  if (ultraFineAdjustmentMode) {
-    Serial.println("ultra-fine adjustment mode (0.01%)");
-  } else if (fineAdjustmentMode) {
-    Serial.println("fine adjustment mode");
-  } else {
-    Serial.println("coarse adjustment mode");
-  }
-}
-
-void showModeChangeIndicator() {
-  if (ultraFineAdjustmentMode) {
-    Serial.println("MODE: ULTRA-FINE ADJUSTMENT (0.01%)");
-  } else if (fineAdjustmentMode) {
-    Serial.println("MODE: FINE ADJUSTMENT");
-  } else {
-    Serial.println("MODE: COARSE ADJUSTMENT");
-  }
+  showPrecisionIndicator();
 }
 
 void IRAM_ATTR handleEncoderInterrupt() {
@@ -142,21 +191,21 @@ void IRAM_ATTR handleButtonInterrupt() {
   
   // Button pressed (LOW since it's pulled up)
   if (buttonState == LOW && !buttonCurrentlyPressed) {
-    buttonCurrentlyPressed = true;
-    buttonPressStartTime = currentTime;
+      buttonCurrentlyPressed = true;
+      buttonPressStartTime = currentTime;
   }
   // Button released (HIGH)
   else if (buttonState == HIGH && buttonCurrentlyPressed) {
-    buttonCurrentlyPressed = false;
-    
-    // Check if it was a long press
-    if (currentTime - buttonPressStartTime > LONG_PRESS_DURATION) {
-      longPressDetected = true;
-    } 
-    // Otherwise it's a normal press if it's past debounce time
-    else if (currentTime - buttonPressStartTime > 20) { // 20ms debounce
-      buttonPressed = true;
-    }
+      buttonCurrentlyPressed = false;
+      
+      // Check if it was a long press
+      if (currentTime - buttonPressStartTime > LONG_PRESS_DURATION) {
+          longPressDetected = true;
+      } 
+      // Otherwise it's a normal press if it's past debounce time
+      else if (currentTime - buttonPressStartTime > 20) { // 20ms debounce
+          buttonPressed = true;
+      }
   }
 }
 
@@ -262,14 +311,21 @@ void handleEncoder() {
   
   // Check for long press to toggle adjustment mode
   if (longPressDetected) {
-    longPressDetected = false;
-    
-    // Only toggle if in value adjustment mode
-    if (valueAdjustmentMode) {
-      toggleAdjustmentPrecision();
-    }
-    return;
+      longPressDetected = false;
+      
+      // Only toggle if in value adjustment mode
+      if (valueAdjustmentMode) {
+          toggleAdjustmentPrecision();
+      }
+      return;
   }
+
+  // // Skip encoder handling if precision indicator is showing
+  // if (precision_indicator != NULL) {
+  //     // Just ignore encoder movements while the indicator is displayed
+  //     lastEncoderValue = encoderValue;
+  //     return;
+  // }
 
   // Skip regular UI navigation when in jog mode
   if (encoderJogMode) {
@@ -359,13 +415,21 @@ void selectCurrentItem() {
   
   // If this is an adjustable value, enter adjustment mode
   if (isAdjustableValue) {
-      valueAdjustmentMode = true;
-      currentAdjustmentObject = currentObj;
-      
-      // Highlight the button to indicate adjustment mode
-      lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
-      
-      return;
+    valueAdjustmentMode = true;
+    currentAdjustmentObject = currentObj;
+    
+    // Highlight the button to indicate adjustment mode
+    if (fineAdjustmentMode) {
+        if (ultraFineAdjustmentMode) {
+            lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x0000FF), LV_PART_MAIN | LV_STATE_DEFAULT); // Blue for ultra-fine
+        } else {
+            lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x00AA00), LV_PART_MAIN | LV_STATE_DEFAULT); // Green for fine
+        }
+    } else {
+        lv_obj_set_style_bg_color(currentObj, lv_color_hex(0xFF6600), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange for coarse
+    }
+    
+    return;
   }
   
   // For other buttons, proceed with normal button click processing

@@ -31,8 +31,6 @@ extern int currentPositionBeingAdjusted;
 void adjustValueByEncoder(lv_obj_t* obj, int delta);
 void toggleAdjustmentPrecision();  // This is the function causing the conflict
 void showModeChangeIndicator();
-
-// Forward declarations for all functions
 void setupEncoder();
 void setupFocusableObjects();
 void handleEncoder();
@@ -40,3 +38,5 @@ void navigateUI(int8_t direction);
 void setFocus(lv_obj_t* obj);
 void selectCurrentItem();
 void setupFocusStyles();
+void showPrecisionIndicator();
+void resetPrecisionIndicator();

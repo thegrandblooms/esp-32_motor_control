@@ -122,6 +122,13 @@ bool valueAdjustmentMode = false;        // Whether we're in value adjustment mo
 lv_obj_t *currentAdjustmentObject = NULL; // Currently selected UI element for adjustment
 int adjustmentSensitivity = ENCODER_FINE_SENSITIVITY; // How much to change per encoder tick
 
+// Spinner references for each screen
+lv_obj_t *move_steps_spinner = NULL;
+lv_obj_t *manual_jog_spinner = NULL;
+lv_obj_t *continuous_rotation_spinner = NULL;
+lv_obj_t *sequence_spinner = NULL;
+lv_obj_t *sequence_positions_spinner = NULL;
+
 // Forward declarations of event handlers
 void on_move_steps_start_clicked();
 void on_move_steps_direction_clicked();
@@ -715,7 +722,6 @@ static void ui_event_handler(lv_event_t *e) {
 }
 
 // Function to attach event handlers to UI elements
-// Function to attach event handlers to UI elements
 void attach_event_handlers() {
     // Main Screen
     lv_obj_add_event_cb(objects.move_steps, ui_event_handler, LV_EVENT_CLICKED, NULL);
@@ -760,6 +766,64 @@ void attach_event_handlers() {
     lv_obj_add_event_cb(objects.back_3, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.acceleration_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.microstepping_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+
+    // Find and store references to all spinners
+    uint32_t child_count;
+
+    // Find spinner on move steps screen
+    child_count = lv_obj_get_child_cnt(objects.move_steps_page);
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(objects.move_steps_page, i);
+        if (lv_obj_check_type(child, &lv_spinner_class)) {
+            move_steps_spinner = child;
+            lv_obj_add_flag(move_steps_spinner, LV_OBJ_FLAG_HIDDEN);  // Initially hidden
+            break;
+        }
+    }
+
+    // Find spinner on manual jog screen
+    child_count = lv_obj_get_child_cnt(objects.manual_jog_page);
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(objects.manual_jog_page, i);
+        if (lv_obj_check_type(child, &lv_spinner_class)) {
+            manual_jog_spinner = child;
+            lv_obj_add_flag(manual_jog_spinner, LV_OBJ_FLAG_HIDDEN);  // Initially hidden
+            break;
+        }
+    }
+
+    // Find spinner on continuous rotation screen
+    child_count = lv_obj_get_child_cnt(objects.continuous_rotation_page);
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(objects.continuous_rotation_page, i);
+        if (lv_obj_check_type(child, &lv_spinner_class)) {
+            continuous_rotation_spinner = child;
+            lv_obj_add_flag(continuous_rotation_spinner, LV_OBJ_FLAG_HIDDEN);  // Initially hidden
+            break;
+        }
+    }
+
+    // Find spinner on sequence screen
+    child_count = lv_obj_get_child_cnt(objects.sequence_page);
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(objects.sequence_page, i);
+        if (lv_obj_check_type(child, &lv_spinner_class)) {
+            sequence_spinner = child;
+            lv_obj_add_flag(sequence_spinner, LV_OBJ_FLAG_HIDDEN);  // Initially hidden
+            break;
+        }
+    }
+
+    // Find spinner on sequence positions screen
+    child_count = lv_obj_get_child_cnt(objects.sequence_positions_page);
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(objects.sequence_positions_page, i);
+        if (lv_obj_check_type(child, &lv_spinner_class)) {
+            sequence_positions_spinner = child;
+            lv_obj_add_flag(sequence_positions_spinner, LV_OBJ_FLAG_HIDDEN);  // Initially hidden
+            break;
+        }
+    }
 }
 
 // Function to update UI labels based on current settings
@@ -835,6 +899,47 @@ void update_ui_labels() {
         char buffer[30];
         snprintf(buffer, sizeof(buffer), "Accel: %d", accelerationSetting);
         lv_label_set_text(accel_label, buffer);
+    }
+
+    // Update spinners based on motor state
+    if (move_steps_spinner) {
+        if (motorRunning) {
+            lv_obj_clear_flag(move_steps_spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(move_steps_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (manual_jog_spinner) {
+        if (encoderJogMode) {
+            lv_obj_clear_flag(manual_jog_spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(manual_jog_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (continuous_rotation_spinner) {
+        if (motorRunning) {
+            lv_obj_clear_flag(continuous_rotation_spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(continuous_rotation_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (sequence_spinner) {
+        if (sequenceData.isRunning) {
+            lv_obj_clear_flag(sequence_spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(sequence_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (sequence_positions_spinner) {
+        if (sequenceData.isRunning) {
+            lv_obj_clear_flag(sequence_positions_spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(sequence_positions_spinner, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     #if USE_DRV8825_DRIVER
