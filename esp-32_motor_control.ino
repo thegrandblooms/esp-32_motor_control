@@ -45,8 +45,6 @@
 // Base motor characteristics
 #define BASE_STEPS_PER_REVOLUTION 200    // Standard for NEMA 17 (1.8° per step)
 #define DEFAULT_MICROSTEP_MODE 8         // Using 1/8 microstepping for smooth operation
-
-// Gear ratio and transmission settings
 float gearRatio = 5.0;                   // Default 5:1 gear ratio
 
 //===============================================
@@ -134,13 +132,45 @@ void on_continuous_rotation_start_clicked();
 void on_continuous_rotation_direction_clicked();
 void on_continuous_rotation_speed_clicked();
 void on_sequence_start_clicked();
-void on_sequence_positions_clicked();
 void on_sequence_speed_clicked();
 void on_sequence_direction_clicked();
 void on_sequence_position_clicked(int position);
 void on_settings_acceleration_clicked();
 void on_settings_microstepping_clicked();
 void on_back_clicked();
+
+//===============================================
+// SEQUENCE MODE CONFIGURATION
+//===============================================
+// Define sequence data structure
+typedef struct {
+    float positions[4];        // Position values (0 is reference, 1-3 are destinations)
+    bool initialDirection;     // Initial direction (true = clockwise)
+    int speedSetting;          // Speed for the sequence
+    bool isRunning;            // Whether sequence is currently running
+    int currentStep;           // Current step in the sequence
+    bool loopSequence;         // Whether to loop continuously (optional)
+} SequenceData_t;
+
+// Create a global instance
+SequenceData_t sequenceData = {
+    .positions = {0, 25, 50, 75},  // Default position values
+    .initialDirection = true,      // Default clockwise
+    .speedSetting = 0,             // Will be set from current speed
+    .isRunning = false,
+    .currentStep = 0,
+    .loopSequence = false          // Optional feature
+};
+
+// Sequence state tracking
+int currentPositionBeingAdjusted = -1;  // -1 means none
+bool lastMoveDirection = true;
+
+// Function prototypes for sequence functions
+void startSequence();
+void stopSequence();
+void moveToNextSequencePosition();
+void updateSequencePositionLabels();
 
 //===============================================
 // MOTOR CONTROL FUNCTIONS
@@ -286,6 +316,56 @@ int rotationPercentToSteps(float percent, float ratio) {
     int effectiveSteps = getEffectiveStepsPerRevolution();
     return (percent * effectiveSteps * ratio) / 100.0;
 }
+
+// Function to handle encoder jog mode
+void checkEncoderJogMode() {
+    // Update last activity time
+    lastMotorActivityTime = millis();
+  
+    // Exit jog mode if encoder button is pressed
+    if (buttonPressed) {
+        buttonPressed = false;
+        encoderJogMode = false;
+        motorRunning = false;
+        stopMotor();
+        update_ui_labels();
+        Serial.println("Exiting encoder jog mode via button press");
+        return;
+    }
+  
+    // Check for encoder movement
+    if (encoderValue != lastJogEncoderValue) {
+        // Calculate movement
+        long delta = encoderValue - lastJogEncoderValue;
+        lastJogEncoderValue = encoderValue;
+        
+        // Scale movement by sensitivity factor - use ENCODER_JOG_STEP_MULTIPLIER instead
+        int moveSteps = delta * ENCODER_JOG_STEP_MULTIPLIER;
+        
+        // Apply direction setting from UI
+        if (!clockwiseDirection) {
+            moveSteps = -moveSteps;
+        }
+        
+        // Only move if there's significant encoder change
+        if (moveSteps != 0) {
+            // Send command to move steps with no acceleration
+            MotorCommand_t cmd;
+            cmd.cmd_type = CMD_MOVE_JOG;  // Use the jog-specific command
+            cmd.position = moveSteps;
+            cmd.speed = speedSetting;
+            controller.sendCommand(&cmd);
+            
+            Serial.print("Encoder jog: ");
+            Serial.print(moveSteps);
+            Serial.println(" steps");
+        }
+    }
+}
+
+//===============================================
+// UI FUNCTIONS
+//===============================================
 
 // Function to adjust values (speed, steps) when in adjustment mode
 void adjustValueByEncoder(lv_obj_t* obj, int delta) {
@@ -445,57 +525,51 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         }
         #endif
     }
-}
-
-// Function to handle encoder jog mode
-void checkEncoderJogMode() {
-    // Update last activity time
-    lastMotorActivityTime = millis();
-  
-    // Exit jog mode if encoder button is pressed
-    if (buttonPressed) {
-        buttonPressed = false;
-        encoderJogMode = false;
-        motorRunning = false;
-        stopMotor();
-        update_ui_labels();
-        Serial.println("Exiting encoder jog mode via button press");
-        return;
-    }
-  
-    // Check for encoder movement
-    if (encoderValue != lastJogEncoderValue) {
-        // Calculate movement
-        long delta = encoderValue - lastJogEncoderValue;
-        lastJogEncoderValue = encoderValue;
+    
+    // Check if we're adjusting a sequence position
+    else if (currentPositionBeingAdjusted >= 0 && currentPositionBeingAdjusted < 4) {
+        // Determine adjustment size based on fine/coarse mode
+        float adjustment = fineAdjustmentMode ? 1.0 : 5.0;
         
-        // Scale movement by sensitivity factor - use ENCODER_JOG_STEP_MULTIPLIER instead
-        int moveSteps = delta * ENCODER_JOG_STEP_MULTIPLIER;
+        // Apply adjustment
+        float newValue = sequenceData.positions[currentPositionBeingAdjusted] + 
+                         (delta * adjustment);
         
-        // Apply direction setting from UI
-        if (!clockwiseDirection) {
-            moveSteps = -moveSteps;
+        // Apply bounds
+        newValue = constrain(newValue, 0.0, 100.0);
+        
+        // Store the new value
+        sequenceData.positions[currentPositionBeingAdjusted] = newValue;
+        
+        // Update the label
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                 currentPositionBeingAdjusted, newValue);
+                 
+        // Update the button label
+        lv_obj_t *posButton;
+        switch(currentPositionBeingAdjusted) {
+            case 0: posButton = objects.sequence_position_0_button; break;
+            case 1: posButton = objects.sequence_position_1_button; break;
+            case 2: posButton = objects.sequence_position_2_button; break;
+            case 3: posButton = objects.sequence_position_3_button; break;
+            default: posButton = NULL; break;
         }
         
-        // Only move if there's significant encoder change
-        if (moveSteps != 0) {
-            // Send command to move steps with no acceleration
-            MotorCommand_t cmd;
-            cmd.cmd_type = CMD_MOVE_JOG;  // Use the jog-specific command
-            cmd.position = moveSteps;
-            cmd.speed = speedSetting;
-            controller.sendCommand(&cmd);
-            
-            Serial.print("Encoder jog: ");
-            Serial.print(moveSteps);
-            Serial.println(" steps");
+        if (posButton) {
+            lv_obj_t *label = lv_obj_get_child(posButton, 0);
+            if (label) {
+                lv_label_set_text(label, buffer);
+            }
         }
+        
+        Serial.print("Position ");
+        Serial.print(currentPositionBeingAdjusted);
+        Serial.print(" adjusted to: ");
+        Serial.println(newValue);
     }
 }
 
-//===============================================
-// UI FUNCTIONS
-//===============================================
 // LVGL event handler function that routes to the appropriate handler
 static void ui_event_handler(lv_event_t *e) {
     lv_obj_t *target = lv_event_get_target(e);
@@ -728,7 +802,7 @@ void update_ui_labels() {
         snprintf(buffer, sizeof(buffer), "Accel: %d", accelerationSetting);
         lv_label_set_text(accel_label, buffer);
     }
-    
+
     #if USE_DRV8825_DRIVER
     lv_obj_t *microstepping_label = lv_obj_get_child(objects.microstepping_button, 0);
     if (microstepping_label) {
@@ -738,11 +812,42 @@ void update_ui_labels() {
         lv_label_set_text(microstepping_label, buffer);
     }
     #endif
+
+    // Update sequence direction button
+    lv_obj_t *seq_dir_label = lv_obj_get_child(objects.sequence_direction_button, 0);
+    if (seq_dir_label) {
+        lv_label_set_text(seq_dir_label, sequenceData.initialDirection ? 
+                          "Initial: CW" : "Initial: CCW");
+    }
+    
+    // Update sequence positions
+    updateSequencePositionLabels();
 }
 
 //===============================================
 // UI EVENT HANDLERS (Connected to LVGL UI)
 //===============================================
+
+// Common back button handler
+void on_back_clicked() {
+    // Stop the motor when going back to main screen
+    stopMotor();
+    // If coming from settings page, make sure to update values
+    if (currentScreenIndex == 6) { // Settings page
+        // Recalculate speed and steps based on current user-friendly values
+        // This accounts for microstepping changes
+        float currentRPM = stepsToRPM(speedSetting, gearRatio);
+        float currentRotationPercent = stepsToRotationPercent(targetSteps, gearRatio);
+        
+        // Update internal values with new microstepping factor
+        speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
+        targetSteps = rotationPercentToSteps(currentRotationPercent, gearRatio);
+        
+        // Update UI to reflect potentially changed values
+        update_ui_labels();
+    }
+}
+
 // When Move Steps screen buttons are pressed
 void on_move_steps_start_clicked() {
     // Toggle between start and stop
@@ -897,42 +1002,13 @@ void on_continuous_rotation_speed_clicked() {
     }
 }
 
-// Common back button handler
-void on_back_clicked() {
-    // Stop the motor when going back to main screen
-    stopMotor();
-    // If coming from settings page, make sure to update values
-    if (currentScreenIndex == 6) { // Settings page
-        // Recalculate speed and steps based on current user-friendly values
-        // This accounts for microstepping changes
-        float currentRPM = stepsToRPM(speedSetting, gearRatio);
-        float currentRotationPercent = stepsToRotationPercent(targetSteps, gearRatio);
-        
-        // Update internal values with new microstepping factor
-        speedSetting = safeRoundStepsPerSec(rpmToSteps(currentRPM, gearRatio));
-        targetSteps = rotationPercentToSteps(currentRotationPercent, gearRatio);
-        
-        // Update UI to reflect potentially changed values
-        update_ui_labels();
-    }
-}
-
 // Sequence screen button handlers
 void on_sequence_start_clicked() {
-    // Toggle between start and stop for sequence mode
-    if (motorRunning) {
-        stopMotor();
+    if (sequenceData.isRunning) {
+        stopSequence();
     } else {
-        // Start sequence execution logic will go here
-        Serial.println("Starting sequence mode");
-        // For now, just update UI
-        update_ui_labels();
+        startSequence();
     }
-}
-
-void on_sequence_positions_clicked() {
-    // This is handled in the event handler by loading the positions screen
-    Serial.println("Opening sequence positions screen");
 }
 
 void on_sequence_speed_clicked() {
@@ -943,24 +1019,71 @@ void on_sequence_speed_clicked() {
         speedSetting += 100;
     }
     update_ui_labels();
-    Serial.print("Sequence speed set to: ");
-    Serial.println(speedSetting);
 }
 
 void on_sequence_direction_clicked() {
-    clockwiseDirection = !clockwiseDirection;
+    sequenceData.initialDirection = !sequenceData.initialDirection;
     update_ui_labels();
-    Serial.print("Sequence direction changed to: ");
-    Serial.println(clockwiseDirection ? "clockwise" : "counterclockwise");
 }
 
 void on_sequence_position_clicked(int position) {
-    // This would open a dialog or set the current editing position
-    Serial.print("Editing sequence position ");
+    // If already in adjustment mode, exit it
+    if (valueAdjustmentMode && currentPositionBeingAdjusted == position) {
+        valueAdjustmentMode = false;
+        currentPositionBeingAdjusted = -1;
+        currentAdjustmentObject = NULL;
+        
+        // Restore original style to the button
+        lv_obj_t *posButton;
+        switch(position) {
+            case 0: posButton = objects.sequence_position_0_button; break;
+            case 1: posButton = objects.sequence_position_1_button; break;
+            case 2: posButton = objects.sequence_position_2_button; break;
+            case 3: posButton = objects.sequence_position_3_button; break;
+        }
+        lv_obj_set_style_bg_color(posButton, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+    
+    // Enter adjustment mode for this position
+    valueAdjustmentMode = true;
+    currentPositionBeingAdjusted = position;
+    
+    // Determine which button we're adjusting
+    lv_obj_t *posButton;
+    switch(position) {
+        case 0: posButton = objects.sequence_position_0_button; break;
+        case 1: posButton = objects.sequence_position_1_button; break;
+        case 2: posButton = objects.sequence_position_2_button; break;
+        case 3: posButton = objects.sequence_position_3_button; break;
+    }
+    
+    // Set the current adjustment object
+    currentAdjustmentObject = posButton;
+    
+    // Highlight the button
+    lv_obj_set_style_bg_color(posButton, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
+    
+    // Update the label with current value
+    char buffer[25];
+    if (position == 0) {
+        snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
+                 sequenceData.positions[position]);
+    } else {
+        snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                 position, sequenceData.positions[position]);
+    }
+    
+    lv_obj_t *label = lv_obj_get_child(posButton, 0);
+    if (label) {
+        lv_label_set_text(label, buffer);
+    }
+    
+    Serial.print("Adjusting sequence position ");
     Serial.println(position);
-    // Implementation will vary based on how you want to handle sequence positions
 }
 
+// Settings button handlers
 void on_settings_acceleration_clicked() {
     // If we're already in adjustment mode, exit it
     if (valueAdjustmentMode && currentAdjustmentObject == objects.acceleration_button) {
@@ -1010,7 +1133,6 @@ void update_microstepping_label() {
     #endif
 }
 
-// Enhanced microstepping button handler
 void on_settings_microstepping_clicked() {
     // The actual adjustment is now handled through the encoder in value adjustment mode
     // This is just needed for direct button click handling if not using the encoder
@@ -1033,6 +1155,179 @@ void on_settings_microstepping_clicked() {
         update_ui_labels();
     }
     #endif
+}
+
+//===============================================
+// SEQUENCE MODE FUNCTIONS
+//===============================================
+// Calculate and execute the next position movement
+void moveToNextSequencePosition() {
+    // Print our starting state
+    Serial.println("------ Starting moveToNextSequencePosition ------");
+    Serial.print("Current step before increment: ");
+    Serial.println(sequenceData.currentStep);
+    
+    // Increment step counter
+    sequenceData.currentStep++;
+    
+    Serial.print("Current step after increment: ");
+    Serial.println(sequenceData.currentStep);
+    
+    // Check if we've reached the end
+    if (sequenceData.currentStep > 3) {
+        Serial.println("Reached end of sequence, stopping");
+        stopSequence();
+        return;
+    }
+    
+    // Get source and target positions EXPLICITLY
+    float sourcePosition = 0;
+    float targetPosition = 0;
+    
+    if (sequenceData.currentStep == 1) {
+        sourcePosition = sequenceData.positions[0]; // Reference
+        targetPosition = sequenceData.positions[1]; // Position 1
+        Serial.println("Moving from reference to position 1");
+    } 
+    else if (sequenceData.currentStep == 2) {
+        sourcePosition = sequenceData.positions[1]; // Position 1
+        targetPosition = sequenceData.positions[2]; // Position 2
+        Serial.println("Moving from position 1 to position 2");
+    }
+    else { // currentStep == 3
+        sourcePosition = sequenceData.positions[2]; // Position 2
+        targetPosition = sequenceData.positions[3]; // Position 3
+        Serial.println("Moving from position 2 to position 3");
+    }
+    
+    Serial.print("Source position: ");
+    Serial.print(sourcePosition);
+    Serial.print("%, Target position: ");
+    Serial.println(targetPosition);
+    
+    // Determine the EXPLICIT direction - TESTING FORCED DIRECTIONS
+    bool moveClockwise = false;
+    
+    // CRITICAL DEBUG: Let's hard-code the directions to match exactly what we want:
+    if (sequenceData.currentStep == 1) {
+        moveClockwise = true;  // Force CW for first move
+        Serial.println("FORCED direction for step 1: CW");
+    } 
+    else if (sequenceData.currentStep == 2) {
+        moveClockwise = false; // Force CCW for second move
+        Serial.println("FORCED direction for step 2: CCW");
+    }
+    else { // currentStep == 3
+        moveClockwise = true;  // Force CW for third move
+        Serial.println("FORCED direction for step 3: CW");
+    }
+    
+    // Calculate movement percentage
+    float movementPercent = 0;
+    
+    // Simplified calculation for clarity
+    if (moveClockwise) {
+        if (targetPosition >= sourcePosition) {
+            // Simple case: going forward
+            movementPercent = targetPosition - sourcePosition;
+            Serial.println("CW forward calculation");
+        } else {
+            // Wrap-around case: going through 100/0
+            movementPercent = (100 - sourcePosition) + targetPosition;
+            Serial.println("CW wrap calculation");
+        }
+    } else {
+        if (targetPosition <= sourcePosition) {
+            // Simple case: going backward
+            movementPercent = sourcePosition - targetPosition;
+            Serial.println("CCW backward calculation");
+        } else {
+            // Wrap-around case: going through 0/100
+            movementPercent = sourcePosition + (100 - targetPosition);
+            Serial.println("CCW wrap calculation");
+        }
+    }
+    
+    // Handle same-position case
+    if (abs(targetPosition - sourcePosition) < 0.1) {
+        movementPercent = 100.0;
+        Serial.println("Same position - full rotation");
+    }
+    
+    Serial.print("Movement percentage: ");
+    Serial.println(movementPercent);
+    
+    // Calculate steps
+    int stepsToMove = rotationPercentToSteps(movementPercent, gearRatio);
+    
+    // CRITICAL - THIS MIGHT BE THE ISSUE
+    // Is the motor controller interpreting direction opposite to our expectations?
+    // Let's try inverting the sign
+    
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_MOVE_STEPS;
+    
+    // Try inverting the sign - this is our debug attempt
+    cmd.position = moveClockwise ? -stepsToMove : stepsToMove;
+    
+    Serial.print("Motor command direction: ");
+    Serial.println(cmd.position > 0 ? "CCW" : "CW");
+    
+    cmd.speed = sequenceData.speedSetting;
+    controller.sendCommand(&cmd);
+    
+    Serial.println("------ Finished moveToNextSequencePosition ------");
+}
+
+void startSequence() {
+    if (motorRunning) {
+        stopMotor();
+        return;
+    }
+    
+    // Initialize sequence
+    sequenceData.isRunning = true;
+    sequenceData.currentStep = 0;  // Start with current step as 0
+    sequenceData.speedSetting = speedSetting;
+    motorRunning = true;
+    
+    // Move to the first position in the sequence (position 1)
+    moveToNextSequencePosition();
+    
+    update_ui_labels();
+}
+
+// Stop sequence execution
+void stopSequence() {
+    sequenceData.isRunning = false;
+    motorRunning = false;
+    stopMotor();
+    update_ui_labels();
+}
+
+// Update the display of sequence position values
+void updateSequencePositionLabels() {
+    lv_obj_t *posButtons[4] = {
+        objects.sequence_position_0_button,
+        objects.sequence_position_1_button,
+        objects.sequence_position_2_button,
+        objects.sequence_position_3_button
+    };
+    
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *label = lv_obj_get_child(posButtons[i], 0);
+        if (label) {
+            char buffer[25];
+            if (i == 0) {
+                snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
+                         sequenceData.positions[i]);
+            } else {
+                snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                         i, sequenceData.positions[i]);
+            }
+            lv_label_set_text(label, buffer);
+        }
+    }
 }
 
 //===============================================
@@ -1101,6 +1396,14 @@ void loop() {
     
     if (motorRunning && encoderJogMode) {
         checkEncoderJogMode();
+    }
+
+    // Check if sequence is running and motor has stopped (completed a step)
+    if (sequenceData.isRunning && !controller.isRunning() && 
+        sequenceData.currentStep > 0 && sequenceData.currentStep < 5) {
+        // Short delay to ensure the motor is really stopped
+        delay(50);
+        moveToNextSequencePosition();
     }
     
     // Check for motor idle timeout - automatic shutdown after inactivity
