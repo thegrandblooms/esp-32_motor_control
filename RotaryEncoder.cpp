@@ -26,6 +26,7 @@ extern void update_ui_labels();
 lv_obj_t *precision_indicator = NULL;
 lv_timer_t *precision_indicator_timer = NULL;
 const uint32_t PRECISION_INDICATOR_DURATION_MS = 1000;  // 1 second
+unsigned long precisionIndicatorEndTime = 0;  // Time when indicator should disappear
 
 // Encoder state tracking
 volatile bool buttonCurrentlyPressed = false;
@@ -103,25 +104,25 @@ void transitionToScreen(enum ScreensEnum screenId, int8_t newScreenIndex, int8_t
 }
 
 void showPrecisionIndicator() {
+  // Set the end time for the indicator
+  precisionIndicatorEndTime = millis() + PRECISION_INDICATOR_DURATION_MS;
+  
   // Always recreate the indicator on the current screen
   if (precision_indicator != NULL) {
       lv_obj_del(precision_indicator);  // Delete the old indicator
       precision_indicator = NULL;
   }
   
-  // Create a new indicator on the current screen
-  precision_indicator = lv_label_create(lv_scr_act());
+  // Create a new indicator as a top-level object
+  precision_indicator = lv_label_create(lv_layer_top());  // Create on top layer
   
-  // Set it to the highest Z-index to stay on top
+  // Set styling
   lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_bg_opa(precision_indicator, 180, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_text_color(precision_indicator, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_radius(precision_indicator, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_pad_all(precision_indicator, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_align(precision_indicator, LV_ALIGN_BOTTOM_MID, 0, -10);
-  
-  // Make sure it stays on top
-  lv_obj_move_foreground(precision_indicator);
   
   // Set the text based on the current mode
   if (ultraFineAdjustmentMode) {
@@ -134,21 +135,14 @@ void showPrecisionIndicator() {
       lv_label_set_text(precision_indicator, "COARSE ADJUSTMENT");
       lv_obj_set_style_bg_color(precision_indicator, lv_color_hex(0xFF6600), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange
   }
-
-  // If timer exists, delete it
+  
+  // Cancel any existing timers
   if (precision_indicator_timer != NULL) {
       lv_timer_del(precision_indicator_timer);
-      precision_indicator_timer = NULL;
   }
   
-  // Create timer to hide the indicator after a delay
-  precision_indicator_timer = lv_timer_create([](lv_timer_t * timer) {
-      if (precision_indicator != NULL) {
-          lv_obj_del(precision_indicator);  // Delete rather than hide
-          precision_indicator = NULL;
-      }
-      precision_indicator_timer = NULL;
-  }, PRECISION_INDICATOR_DURATION_MS, NULL);
+  // We'll handle timer in handleEncoder instead of using LVGL timer
+  precision_indicator_timer = NULL;
 }
 
 void toggleAdjustmentPrecision() {
@@ -308,6 +302,12 @@ void setupFocusableObjects() {
 
 void handleEncoder() {
   unsigned long currentTime = millis();
+
+  // Check if it's time to hide the precision indicator
+  if (precision_indicator != NULL && currentTime > precisionIndicatorEndTime) {
+      lv_obj_del(precision_indicator);
+      precision_indicator = NULL;
+  }
   
   // Check for long press to toggle adjustment mode
   if (longPressDetected) {
