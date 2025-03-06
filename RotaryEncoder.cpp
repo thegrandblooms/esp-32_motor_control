@@ -11,7 +11,7 @@ const unsigned long SCREEN_PRE_RENDER_DELAY_MS = 5;    // Delay before LVGL rend
 const unsigned long SCREEN_POST_RENDER_DELAY_MS = 150; // Delay after LVGL rendering
 
 // Long press settings
-#define LONG_PRESS_DURATION 800  // 800ms for long press
+#define LONG_PRESS_DURATION 400  // 800ms for long press
 volatile unsigned long buttonPressStartTime = 0;
 volatile bool longPressDetected = false;
 
@@ -320,13 +320,6 @@ void handleEncoder() {
       return;
   }
 
-  // // Skip encoder handling if precision indicator is showing
-  // if (precision_indicator != NULL) {
-  //     // Just ignore encoder movements while the indicator is displayed
-  //     lastEncoderValue = encoderValue;
-  //     return;
-  // }
-
   // Skip regular UI navigation when in jog mode
   if (encoderJogMode) {
       return;
@@ -376,6 +369,12 @@ void handleEncoder() {
     selectCurrentItem();
     buttonPressed = false;
   }
+
+  // After processing encoder movements, ensure the precision indicator stays visible
+  if (precision_indicator != NULL) {
+    // Make sure it stays on top after any UI updates
+    lv_obj_move_foreground(precision_indicator);
+  }
 }
 
 void selectCurrentItem() {
@@ -418,16 +417,31 @@ void selectCurrentItem() {
     valueAdjustmentMode = true;
     currentAdjustmentObject = currentObj;
     
-    // Highlight the button to indicate adjustment mode
-    if (fineAdjustmentMode) {
-        if (ultraFineAdjustmentMode) {
-            lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x0000FF), LV_PART_MAIN | LV_STATE_DEFAULT); // Blue for ultra-fine
-        } else {
-            lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x00AA00), LV_PART_MAIN | LV_STATE_DEFAULT); // Green for fine
+    // Reset adjustment modes based on what we're adjusting
+    if (currentScreenIndex == 5) { // Sequence positions page
+        // For sequence positions, determine which position is being adjusted
+        if (currentObj == objects.sequence_position_0_button) {
+            currentPositionBeingAdjusted = 0;
+        } else if (currentObj == objects.sequence_position_1_button) {
+            currentPositionBeingAdjusted = 1;
+        } else if (currentObj == objects.sequence_position_2_button) {
+            currentPositionBeingAdjusted = 2;
+        } else if (currentObj == objects.sequence_position_3_button) {
+            currentPositionBeingAdjusted = 3;
         }
+        
+        // For sequence positions, always use fine mode initially
+        fineAdjustmentMode = true;
+        ultraFineAdjustmentMode = false;
     } else {
-        lv_obj_set_style_bg_color(currentObj, lv_color_hex(0xFF6600), LV_PART_MAIN | LV_STATE_DEFAULT); // Orange for coarse
+        // For all other adjustable values
+        fineAdjustmentMode = true;
+        ultraFineAdjustmentMode = false;
+        currentPositionBeingAdjusted = -1; // Not a sequence position
     }
+    
+    // Highlight the button to indicate adjustment mode
+    lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
     
     return;
   }
