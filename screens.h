@@ -49,6 +49,7 @@ typedef struct _objects_t {
     lv_obj_t *sequence_position_1_button;
     lv_obj_t *sequence_position_2_button;
     lv_obj_t *sequence_position_3_button;
+    lv_obj_t *sequence_position_4_button;
     lv_obj_t *header_4;
     lv_obj_t *back_3;
     lv_obj_t *acceleration_button;
