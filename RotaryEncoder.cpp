@@ -195,10 +195,14 @@ void IRAM_ATTR handleButtonInterrupt() {
       // Check if it was a long press
       if (currentTime - buttonPressStartTime > LONG_PRESS_DURATION) {
           longPressDetected = true;
+          // Debug message for long press detection
+          Serial.println("DEBUG: Long press detected");
       } 
       // Otherwise it's a normal press if it's past debounce time
       else if (currentTime - buttonPressStartTime > 20) { // 20ms debounce
           buttonPressed = true;
+          // Debug message for button press detection
+          Serial.println("DEBUG: Button press detected");
       }
   }
 }
@@ -285,10 +289,11 @@ void setupFocusableObjects() {
     objects.sequence_position_0_button,
     objects.sequence_position_1_button,
     objects.sequence_position_2_button,
-    objects.sequence_position_3_button
+    objects.sequence_position_3_button,
+    objects.sequence_position_4_button
   };
   focusableObjects[5] = sequencePositionsScreenObjects;
-  focusableObjectsCount[5] = 5;
+  focusableObjectsCount[5] = 6;
   
   // Settings screen
   static lv_obj_t* settingsScreenObjects[] = {
@@ -333,6 +338,14 @@ void handleEncoder() {
               // Determine direction based on encoder values
               int rawDirection = encoderValue > lastEncoderValue ? 1 : -1;
               int direction = REVERSE_ENCODER_DIRECTION ? -rawDirection : rawDirection;
+              
+              // Debugging for position adjustment
+              if (currentPositionBeingAdjusted >= 0) {
+                Serial.print("Adjusting position ");
+                Serial.print(currentPositionBeingAdjusted);
+                Serial.print(" with direction ");
+                Serial.println(direction);
+              }
               
               // Adjust the appropriate value based on which object is being adjusted
               adjustValueByEncoder(currentAdjustmentObject, direction * adjustmentSensitivity);
@@ -380,65 +393,60 @@ void handleEncoder() {
 void selectCurrentItem() {
   lv_obj_t *currentObj = focusableObjects[currentScreenIndex][currentFocusIndex];
   
-  // Check if we're already in value adjustment mode
-  if (valueAdjustmentMode) {
-      // Exit value adjustment mode
-      valueAdjustmentMode = false;
-      currentAdjustmentObject = NULL;
+  // For sequence positions screen, directly send the click event to the standard handler
+  if (currentScreenIndex == 5) { // Sequence Positions Page
+    if (currentObj == objects.sequence_position_0_button ||
+        currentObj == objects.sequence_position_1_button ||
+        currentObj == objects.sequence_position_2_button ||
+        currentObj == objects.sequence_position_3_button ||
+        currentObj == objects.sequence_position_4_button) {
       
-      // Restore original style (remove highlight)
-      lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
-      
+      // Just forward the click to the standard event handler
+      lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
       return;
+    }
   }
   
-  // Check if this is a value that can be adjusted
+  // If already in adjustment mode, exit it
+  if (valueAdjustmentMode) {
+    valueAdjustmentMode = false;
+    currentPositionBeingAdjusted = -1;
+    currentAdjustmentObject = NULL;
+    
+    // Restore original style (remove highlight)
+    lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+    
+    return;
+  }
+  
+  // Handle other adjustable values
   bool isAdjustableValue = false;
   
   if (currentScreenIndex == 1) { // Move Steps Page
-      isAdjustableValue = (currentObj == objects.step_num || currentObj == objects.speed);
+    isAdjustableValue = (currentObj == objects.step_num || currentObj == objects.speed);
   }
   else if (currentScreenIndex == 2) { // Manual Jog Page
-      isAdjustableValue = (currentObj == objects.speed_manual_jog);
+    isAdjustableValue = (currentObj == objects.speed_manual_jog);
   }
   else if (currentScreenIndex == 3) { // Continuous Rotation Page
-      isAdjustableValue = (currentObj == objects.continuous_rotation_speed_button);
+    isAdjustableValue = (currentObj == objects.continuous_rotation_speed_button);
   }
   else if (currentScreenIndex == 4) { // Sequence Page
-      isAdjustableValue = (currentObj == objects.sequence_speed_button);
+    isAdjustableValue = (currentObj == objects.sequence_speed_button);
   }
   else if (currentScreenIndex == 6) { // Settings Page
     isAdjustableValue = (currentObj == objects.microstepping_button || 
-                          currentObj == objects.acceleration_button); 
-}
+                          currentObj == objects.acceleration_button);
+  }
   
   // If this is an adjustable value, enter adjustment mode
   if (isAdjustableValue) {
     valueAdjustmentMode = true;
     currentAdjustmentObject = currentObj;
     
-    // Reset adjustment modes based on what we're adjusting
-    if (currentScreenIndex == 5) { // Sequence positions page
-        // For sequence positions, determine which position is being adjusted
-        if (currentObj == objects.sequence_position_0_button) {
-            currentPositionBeingAdjusted = 0;
-        } else if (currentObj == objects.sequence_position_1_button) {
-            currentPositionBeingAdjusted = 1;
-        } else if (currentObj == objects.sequence_position_2_button) {
-            currentPositionBeingAdjusted = 2;
-        } else if (currentObj == objects.sequence_position_3_button) {
-            currentPositionBeingAdjusted = 3;
-        }
-        
-        // For sequence positions, always use fine mode initially
-        fineAdjustmentMode = true;
-        ultraFineAdjustmentMode = false;
-    } else {
-        // For all other adjustable values
-        fineAdjustmentMode = true;
-        ultraFineAdjustmentMode = false;
-        currentPositionBeingAdjusted = -1; // Not a sequence position
-    }
+    // Set the default adjustment modes
+    fineAdjustmentMode = true;
+    ultraFineAdjustmentMode = false;
     
     // Highlight the button to indicate adjustment mode
     lv_obj_set_style_bg_color(currentObj, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -446,40 +454,51 @@ void selectCurrentItem() {
     return;
   }
   
-  // For other buttons, proceed with normal button click processing
-  // Before loading a new screen, clear all focus states to prevent style artifacts
+  // For screen navigation and other non-adjustable buttons
+  // Clear focus states first
   for (int i = 0; i < focusableObjectsCount[currentScreenIndex]; i++) {
     lv_obj_clear_state(focusableObjects[currentScreenIndex][i], LV_STATE_FOCUSED);
   }
   
-// Handle navigation between screens based on the selected button
-if (currentScreenIndex == 0) { // Main screen
-    if (currentObj == objects.move_steps) {transitionToScreen(SCREEN_ID_MOVE_STEPS_PAGE, 1, 0);} 
-    else if (currentObj == objects.manual_jog) {transitionToScreen(SCREEN_ID_MANUAL_JOG_PAGE, 2, 0);} 
-    else if (currentObj == objects.continuous) {transitionToScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE, 3, 0);} 
-    else if (currentObj == objects.auto_button) {transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);} 
-    else if (currentObj == objects.settings_button) {transitionToScreen(SCREEN_ID_SETTINGS_PAGE, 6, 0);}
-}
-
-else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
-  transitionToScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE, 5, 0);} // Handle navigation to sequence positions submenu
-
-else {
-        // Handle back buttons on sub-screens
-        if ((currentScreenIndex == 1 && currentObj == objects.back) ||
-            (currentScreenIndex == 2 && currentObj == objects.back_1) ||
-            (currentScreenIndex == 3 && currentObj == objects.back_2) ||
-            (currentScreenIndex == 6 && currentObj == objects.back_3)) {
-          transitionToScreen(SCREEN_ID_MAIN, 0, 0);} 
-
-        // Go back from sequence screen to main
-        else if (currentScreenIndex == 4 && currentObj == objects.back_4) {transitionToScreen(SCREEN_ID_MAIN, 0, 0);}
-
-        // Go back from sequence positions screen to sequence screen
-        else if (currentScreenIndex == 5 && currentObj == objects.back_5) {transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);}
-
-        // Simulate a button click event for other buttons
-        else {lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);}
+  // Handle navigation between screens 
+  if (currentScreenIndex == 0) { // Main screen
+    if (currentObj == objects.move_steps) {
+      transitionToScreen(SCREEN_ID_MOVE_STEPS_PAGE, 1, 0);
+    } 
+    else if (currentObj == objects.manual_jog) {
+      transitionToScreen(SCREEN_ID_MANUAL_JOG_PAGE, 2, 0);
+    } 
+    else if (currentObj == objects.continuous) {
+      transitionToScreen(SCREEN_ID_CONTINUOUS_ROTATION_PAGE, 3, 0);
+    } 
+    else if (currentObj == objects.auto_button) {
+      transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);
+    } 
+    else if (currentObj == objects.settings_button) {
+      transitionToScreen(SCREEN_ID_SETTINGS_PAGE, 6, 0);
+    }
+  }
+  else if (currentScreenIndex == 4 && currentObj == objects.sequence_positions_button) {
+    transitionToScreen(SCREEN_ID_SEQUENCE_POSITIONS_PAGE, 5, 0);
+  }
+  else {
+    // Handle back buttons
+    if ((currentScreenIndex == 1 && currentObj == objects.back) ||
+        (currentScreenIndex == 2 && currentObj == objects.back_1) ||
+        (currentScreenIndex == 3 && currentObj == objects.back_2) ||
+        (currentScreenIndex == 6 && currentObj == objects.back_3)) {
+      transitionToScreen(SCREEN_ID_MAIN, 0, 0);
+    } 
+    else if (currentScreenIndex == 4 && currentObj == objects.back_4) {
+      transitionToScreen(SCREEN_ID_MAIN, 0, 0);
+    }
+    else if (currentScreenIndex == 5 && currentObj == objects.back_5) {
+      transitionToScreen(SCREEN_ID_SEQUENCE_PAGE, 4, 0);
+    }
+    else {
+      // Forward any other button clicks to the event handler
+      lv_event_send(currentObj, LV_EVENT_CLICKED, NULL);
+    }
   }
 }
 
@@ -494,6 +513,9 @@ void setFocus(lv_obj_t* obj) {
 }
 
 void navigateUI(int8_t direction) {
+  // Save old index for debugging
+  int8_t oldFocusIndex = currentFocusIndex;
+  
   // Update focus index
   currentFocusIndex += direction;
   
@@ -503,6 +525,16 @@ void navigateUI(int8_t direction) {
   } else if (currentFocusIndex >= focusableObjectsCount[currentScreenIndex]) {
     currentFocusIndex = 0;
   }
+  
+  // Debug output
+  Serial.print("Focus changed: Screen ");
+  Serial.print(currentScreenIndex);
+  Serial.print(", index ");
+  Serial.print(oldFocusIndex);
+  Serial.print(" -> ");
+  Serial.print(currentFocusIndex);
+  Serial.print(", object ptr: 0x");
+  Serial.println((uint32_t)focusableObjects[currentScreenIndex][currentFocusIndex], HEX);
   
   // Focus the new object
   setFocus(focusableObjects[currentScreenIndex][currentFocusIndex]);

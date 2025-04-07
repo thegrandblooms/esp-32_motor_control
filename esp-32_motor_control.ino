@@ -152,7 +152,7 @@ void on_back_clicked();
 //===============================================
 // Define sequence data structure
 typedef struct {
-    float positions[4];        // Position values (0 is reference, 1-3 are destinations)
+    float positions[5];        // Position values (0-4)
     bool initialDirection;     // Initial direction (true = clockwise)
     int speedSetting;          // Speed for the sequence
     bool isRunning;            // Whether sequence is currently running
@@ -160,14 +160,14 @@ typedef struct {
     bool loopSequence;         // Whether to loop continuously (optional)
 } SequenceData_t;
 
-// Create a global instance
+// Initialize with default values for all 5 positions
 SequenceData_t sequenceData = {
-    .positions = {0, 25, 50, 75},  // Default position values
-    .initialDirection = true,      // Default clockwise
-    .speedSetting = 0,             // Will be set from current speed
+    .positions = {0, 25, 50, 75, 100},  // Default position values for all 5 positions
+    .initialDirection = true,           // Default clockwise
+    .speedSetting = 0,                  // Will be set from current speed
     .isRunning = false,
     .currentStep = 0,
-    .loopSequence = false          // Optional feature
+    .loopSequence = false               // Optional feature
 };
 
 // Sequence state tracking
@@ -548,38 +548,52 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
     }
     
     // Check if we're adjusting a sequence position
-    else if (currentPositionBeingAdjusted >= 0 && currentPositionBeingAdjusted < 4) {
+    else if (currentPositionBeingAdjusted >= 0 && currentPositionBeingAdjusted < 5) {
         // Determine adjustment size based on mode
         float adjustment;
         
         if (ultraFineAdjustmentMode) {
-          adjustment = 0.01; // Ultra-fine: 0.01% increments
+            adjustment = 0.01; // Ultra-fine: 0.01% increments
         } else if (fineAdjustmentMode) {
-          adjustment = 1.0;  // Fine: 1% increments
+            adjustment = 1.0;  // Fine: 1% increments
         } else {
-          adjustment = 5.0;  // Coarse: 5% increments
+            adjustment = 5.0;  // Coarse: 5% increments
         }
         
         // Apply adjustment
         float newValue = sequenceData.positions[currentPositionBeingAdjusted] + 
                         (delta * adjustment);
         
-        // Apply bounds
-        newValue = constrain(newValue, 0.0, 100.0);
+        // Apply bounds - only constrain the lower bound to 0
+        newValue = constrain(newValue, 0.0, 3600.0);  // Allow up to 36 rotations (3600%)
         
         // Store the new value
         sequenceData.positions[currentPositionBeingAdjusted] = newValue;
         
-        // Update the label - use more decimal places in ultra-fine mode
-        char buffer[25];
-        if (ultraFineAdjustmentMode) {
-          snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
-                  currentPositionBeingAdjusted, newValue);
+        // Format the position string based on rotation count
+        char buffer[30];
+        int rotations = (int)(newValue / 100.0);
+        float normalizedPos = fmod(newValue, 100.0);
+        
+        // Display in normalized format
+        if (rotations > 0) {
+            if (ultraFineAdjustmentMode) {
+                snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%% +%d rot.", 
+                        currentPositionBeingAdjusted, normalizedPos, rotations);
+            } else {
+                snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%% +%d rot.", 
+                        currentPositionBeingAdjusted, normalizedPos, rotations);
+            }
         } else {
-          snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                  currentPositionBeingAdjusted, newValue);
+            if (ultraFineAdjustmentMode) {
+                snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
+                        currentPositionBeingAdjusted, normalizedPos);
+            } else {
+                snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                        currentPositionBeingAdjusted, normalizedPos);
+            }
         }
-                 
+        
         // Update the button label
         lv_obj_t *posButton;
         switch(currentPositionBeingAdjusted) {
@@ -587,6 +601,7 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
             case 1: posButton = objects.sequence_position_1_button; break;
             case 2: posButton = objects.sequence_position_2_button; break;
             case 3: posButton = objects.sequence_position_3_button; break;
+            case 4: posButton = objects.sequence_position_4_button; break;
             default: posButton = NULL; break;
         }
         
@@ -600,7 +615,12 @@ void adjustValueByEncoder(lv_obj_t* obj, int delta) {
         Serial.print("Position ");
         Serial.print(currentPositionBeingAdjusted);
         Serial.print(" adjusted to: ");
-        Serial.println(newValue);
+        Serial.print(newValue);
+        Serial.print(" (");
+        Serial.print(normalizedPos);
+        Serial.print("% +");
+        Serial.print(rotations);
+        Serial.println(" rot.)");
     }
 }
 
@@ -706,6 +726,9 @@ static void ui_event_handler(lv_event_t *e) {
         else if (target == objects.sequence_position_3_button) {
             on_sequence_position_clicked(3);
         }
+        else if (target == objects.sequence_position_4_button) {
+            on_sequence_position_clicked(4);
+        }
         
         // Settings Page
         else if (target == objects.back_3) {
@@ -761,6 +784,7 @@ void attach_event_handlers() {
     lv_obj_add_event_cb(objects.sequence_position_1_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.sequence_position_2_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(objects.sequence_position_3_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(objects.sequence_position_4_button, ui_event_handler, LV_EVENT_CLICKED, NULL);
     
     // Settings Page
     lv_obj_add_event_cb(objects.back_3, ui_event_handler, LV_EVENT_CLICKED, NULL);
@@ -1166,35 +1190,46 @@ void on_sequence_direction_clicked() {
 }
 
 void on_sequence_position_clicked(int position) {
+    // Log more information to help debug
+    Serial.print("Position ");
+    Serial.print(position);
+    Serial.println(" clicked"); 
+  
     // If already in adjustment mode, exit it
     if (valueAdjustmentMode && currentPositionBeingAdjusted == position) {
-        valueAdjustmentMode = false;
-        currentPositionBeingAdjusted = -1;
-        currentAdjustmentObject = NULL;
-        
-        // Restore original style to the button
-        lv_obj_t *posButton;
-        switch(position) {
-            case 0: posButton = objects.sequence_position_0_button; break;
-            case 1: posButton = objects.sequence_position_1_button; break;
-            case 2: posButton = objects.sequence_position_2_button; break;
-            case 3: posButton = objects.sequence_position_3_button; break;
-        }
-        lv_obj_set_style_bg_color(posButton, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
-        return;
+      Serial.println("Exiting adjustment mode");
+      valueAdjustmentMode = false;
+      currentPositionBeingAdjusted = -1;
+      currentAdjustmentObject = NULL;
+      
+      // Restore original style to the button
+      lv_obj_t *posButton;
+      switch(position) {
+          case 0: posButton = objects.sequence_position_0_button; break;
+          case 1: posButton = objects.sequence_position_1_button; break;
+          case 2: posButton = objects.sequence_position_2_button; break;
+          case 3: posButton = objects.sequence_position_3_button; break;
+          case 4: posButton = objects.sequence_position_4_button; break;
+          default: posButton = NULL; break;
+      }
+      lv_obj_set_style_bg_color(posButton, lv_color_hex(0x656565), LV_PART_MAIN | LV_STATE_DEFAULT);
+      return;
     }
     
     // Enter adjustment mode for this position
+    Serial.println("Entering adjustment mode");
     valueAdjustmentMode = true;
     currentPositionBeingAdjusted = position;
     
     // Determine which button we're adjusting
     lv_obj_t *posButton;
     switch(position) {
-        case 0: posButton = objects.sequence_position_0_button; break;
-        case 1: posButton = objects.sequence_position_1_button; break;
-        case 2: posButton = objects.sequence_position_2_button; break;
-        case 3: posButton = objects.sequence_position_3_button; break;
+      case 0: posButton = objects.sequence_position_0_button; break;
+      case 1: posButton = objects.sequence_position_1_button; break;
+      case 2: posButton = objects.sequence_position_2_button; break;
+      case 3: posButton = objects.sequence_position_3_button; break;
+      case 4: posButton = objects.sequence_position_4_button; break;
+      default: posButton = NULL; break;
     }
     
     // Set the current adjustment object
@@ -1203,25 +1238,34 @@ void on_sequence_position_clicked(int position) {
     // Highlight the button
     lv_obj_set_style_bg_color(posButton, lv_color_hex(0x2196F3), LV_PART_MAIN | LV_STATE_DEFAULT);
     
-    // Update the label with current value
-    char buffer[25];
-    if (position == 0) {
-        snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
-                 sequenceData.positions[position]);
+    // For sequence positions, always use fine mode initially
+    fineAdjustmentMode = true;
+    ultraFineAdjustmentMode = false;
+    
+    // Format the position string based on rotation count
+    char buffer[30];
+    float value = sequenceData.positions[position];
+    int rotations = (int)(value / 100.0);
+    float normalizedPos = fmod(value, 100.0);
+    
+    // Display in normalized format
+    if (rotations > 0) {
+      snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%% +%d rot.", 
+              position, normalizedPos, rotations);
     } else {
-        snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                 position, sequenceData.positions[position]);
+      snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+              position, normalizedPos);
     }
     
     lv_obj_t *label = lv_obj_get_child(posButton, 0);
     if (label) {
-        lv_label_set_text(label, buffer);
+      lv_label_set_text(label, buffer);
     }
     
     Serial.print("Adjusting sequence position ");
     Serial.println(position);
-}
-
+  }
+  
 // Settings button handlers
 void on_settings_acceleration_clicked() {
     // If we're already in adjustment mode, exit it
@@ -1305,7 +1349,7 @@ void moveToNextSequencePosition() {
     sequenceData.currentStep++;
     
     // Check if we've reached the end
-    if (sequenceData.currentStep > 3) {
+    if (sequenceData.currentStep > 4) {
         if (sequenceData.loopSequence) {
             sequenceData.currentStep = 1;  // Loop back to position 1
         } else {
@@ -1316,20 +1360,32 @@ void moveToNextSequencePosition() {
     
     // Determine source and target positions
     float sourcePosition, targetPosition;
+    int sourceRotations, targetRotations;
+    int sourceIndex, targetIndex;
     
     if (sequenceData.currentStep == 1) {
         // First move - from reference to position 1
-        sourcePosition = sequenceData.positions[0];
-        targetPosition = sequenceData.positions[1];
+        sourceIndex = 0;
+        targetIndex = 1;
     } else if (sequenceData.currentStep == 2) {
         // Second move - from position 1 to position 2
-        sourcePosition = sequenceData.positions[1];
-        targetPosition = sequenceData.positions[2];
-    } else { // currentStep == 3
+        sourceIndex = 1;
+        targetIndex = 2;
+    } else if (sequenceData.currentStep == 3) {
         // Third move - from position 2 to position 3
-        sourcePosition = sequenceData.positions[2];
-        targetPosition = sequenceData.positions[3];
+        sourceIndex = 2;
+        targetIndex = 3;
+    } else { // currentStep == 4
+        // Fourth move - from position 3 to position 4
+        sourceIndex = 3;
+        targetIndex = 4;
     }
+    
+    // Extract positions and rotation counts
+    sourcePosition = fmod(sequenceData.positions[sourceIndex], 100.0);
+    targetPosition = fmod(sequenceData.positions[targetIndex], 100.0);
+    sourceRotations = (int)(sequenceData.positions[sourceIndex] / 100.0);
+    targetRotations = (int)(sequenceData.positions[targetIndex] / 100.0);
     
     // Determine direction based on the step number
     bool moveClockwise;
@@ -1339,32 +1395,51 @@ void moveToNextSequencePosition() {
     } else if (sequenceData.currentStep == 2) {
         // Second move: Opposite of configured direction
         moveClockwise = !sequenceData.initialDirection;
-    } else { // currentStep == 3
-        // Third move: Same as configured direction 
+    } else if (sequenceData.currentStep == 3) {
+        // Third move: Same as configured direction
         moveClockwise = sequenceData.initialDirection;
+    } else { // currentStep == 4
+        // Fourth move: Opposite of configured direction
+        moveClockwise = !sequenceData.initialDirection;
     }
     
     // Calculate movement percentage
     float movementPercent;
     
-    // Handle same-position case (full rotation)
-    if (abs(targetPosition - sourcePosition) < 0.1) {
-        movementPercent = 100.0;
+    // Handle same-position case (no rotation by default)
+    if (abs(targetPosition - sourcePosition) < 0.1 && sourceRotations == targetRotations) {
+        movementPercent = 100.0; // Do one full rotation
     }
     // Calculate movement based on direction and positions
-    else if (moveClockwise) {
-        // For clockwise movement
-        if (targetPosition > sourcePosition) {
-            movementPercent = targetPosition - sourcePosition;
+    else {
+        if (moveClockwise) {
+            // For clockwise movement
+            if (targetPosition > sourcePosition) {
+                movementPercent = targetPosition - sourcePosition;
+            } else {
+                movementPercent = (100 - sourcePosition) + targetPosition;
+            }
         } else {
-            movementPercent = (100 - sourcePosition) + targetPosition;
+            // For counter-clockwise movement
+            if (targetPosition < sourcePosition) {
+                movementPercent = sourcePosition - targetPosition;
+            } else {
+                movementPercent = sourcePosition + (100 - targetPosition);
+            }
         }
-    } else {
-        // For counter-clockwise movement
-        if (targetPosition < sourcePosition) {
-            movementPercent = sourcePosition - targetPosition;
-        } else {
-            movementPercent = sourcePosition + (100 - targetPosition);
+        
+        // Add rotation difference to movement percentage
+        int rotationDifference = targetRotations - sourceRotations;
+        if (rotationDifference != 0) {
+            // For clockwise movement, add positive rotations
+            // For counter-clockwise movement, subtract positive rotations
+            if (moveClockwise) {
+                movementPercent += (rotationDifference * 100.0);
+            } else {
+                // If we're moving CCW, but target has more rotations,
+                // we need to do full rotations in CCW direction
+                movementPercent += (abs(rotationDifference) * 100.0);
+            }
         }
     }
     
@@ -1382,10 +1457,18 @@ void moveToNextSequencePosition() {
     Serial.print("Sequence step ");
     Serial.print(sequenceData.currentStep);
     Serial.print(": ");
+    Serial.print(sequenceData.positions[sourceIndex]);
+    Serial.print(" (");
     Serial.print(sourcePosition);
-    Serial.print("% -> ");
+    Serial.print("% +");
+    Serial.print(sourceRotations);
+    Serial.print(" rot.) -> ");
+    Serial.print(sequenceData.positions[targetIndex]);
+    Serial.print(" (");
     Serial.print(targetPosition);
-    Serial.print("%, moving ");
+    Serial.print("% +");
+    Serial.print(targetRotations);
+    Serial.print(" rot.), moving ");
     Serial.print(movementPercent);
     Serial.print("% ");
     Serial.print(moveClockwise ? "CW" : "CCW");
@@ -1420,34 +1503,38 @@ void stopSequence() {
 
 // Update the display of sequence position values
 void updateSequencePositionLabels() {
-    lv_obj_t *posButtons[4] = {
+    lv_obj_t *posButtons[5] = {
         objects.sequence_position_0_button,
         objects.sequence_position_1_button,
         objects.sequence_position_2_button,
-        objects.sequence_position_3_button
+        objects.sequence_position_3_button,
+        objects.sequence_position_4_button
     };
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         lv_obj_t *label = lv_obj_get_child(posButtons[i], 0);
         if (label) {
-            char buffer[25];
+            char buffer[30];
+            float value = sequenceData.positions[i];
+            int rotations = (int)(value / 100.0);
+            float normalizedPos = fmod(value, 100.0);
             
-            // Show more decimal places if we're in ultra-fine mode
-            if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
-                if (i == 0) {
-                    snprintf(buffer, sizeof(buffer), "Ref: %.2f%%", 
-                            sequenceData.positions[i]);
+            // Format string based on rotation count
+            if (rotations > 0) {
+                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%% +%d rot.", 
+                            i, normalizedPos, rotations);
                 } else {
-                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
-                            i, sequenceData.positions[i]);
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%% +%d rot.", 
+                            i, normalizedPos, rotations);
                 }
             } else {
-                if (i == 0) {
-                    snprintf(buffer, sizeof(buffer), "Ref: %.1f%%", 
-                            sequenceData.positions[i]);
+                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
+                            i, normalizedPos);
                 } else {
                     snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                            i, sequenceData.positions[i]);
+                            i, normalizedPos);
                 }
             }
             
