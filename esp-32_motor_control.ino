@@ -43,6 +43,11 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 #define ACCEL_MAX 12800 // maximum acceleration in settings
 #define MOTOR_IDLE_TIMEOUT_MS 5000       // 5 seconds before motor power saving
 
+// Rotation Direction
+#define INVERT_STEP_MODE_DIRECTION true       // Set to true to invert direction in steps mode
+#define INVERT_CONTINUOUS_MODE_DIRECTION true // Set to true to invert direction in continuous mode
+#define INVERT_JOG_MODE_DIRECTION false       // Set to true to invert direction in jog mode
+
 //===============================================
 // ENCODER AND UI SETTINGS
 //===============================================
@@ -50,12 +55,6 @@ float gearRatio = 5.0;                   // Default 5:1 gear ratio
 #define ENCODER_FINE_SENSITIVITY 1       // For fine adjustments
 #define ENCODER_COARSE_SENSITIVITY 3     // For coarse adjustments
 #define ENCODER_JOG_STEP_MULTIPLIER 4    // Multiplier for steps per encoder tick in jog mode
-
-//===============================================
-// ENCODER JOG CONFIGURATION
-//===============================================
-bool encoderJogMode = false;
-long lastJogEncoderValue = 0;            // Track encoder position for jog mode
 
 //===============================================
 // DRIVER CONFIGURATION
@@ -108,6 +107,11 @@ bool clockwiseDirection = true;
 bool enableMotorPowerSave = true;
 bool fineAdjustmentMode = true;          // Toggle between fine/coarse adjustment
 bool ultraFineAdjustmentMode = false;  // For 0.01% precision adjustments
+
+// Encoder jog state tracking
+bool encoderJogMode = false;
+long lastJogEncoderValue = 0;            // Track encoder position for jog mode
+static long encoderValueAccumulator = 0;
 
 // Current settings (these get converted to/from user-friendly units)
 int targetSteps;                         // Target steps to move
@@ -227,15 +231,16 @@ void startStepperMotion(int steps, bool clockwise, int speed) {
     controller.wake();
     #endif
     
-    // Set direction and steps
-    int relativeSteps = clockwise ? steps : -steps;
+    // Set direction and steps with inversion flag
+    bool effectiveDirection = INVERT_STEP_MODE_DIRECTION ? !clockwise : clockwise;
+    int relativeSteps = effectiveDirection ? steps : -steps;
     
     // Send command to move
     MotorCommand_t cmd;
     cmd.cmd_type = CMD_MOVE_STEPS;
     cmd.position = relativeSteps;
     cmd.speed = speed;
-    cmd.direction = clockwise;
+    cmd.direction = effectiveDirection;
     controller.sendCommand(&cmd);
     
     // Remember state
@@ -270,11 +275,14 @@ void startContinuousRotation(bool clockwise, int speed) {
     controller.wake();
     #endif
     
+    // Apply direction inversion if configured
+    bool effectiveDirection = INVERT_CONTINUOUS_MODE_DIRECTION ? !clockwise : clockwise;
+    
     // Send command for continuous rotation
     MotorCommand_t cmd;
     cmd.cmd_type = CMD_START_CONTINUOUS;
     cmd.speed = speed;
-    cmd.direction = clockwise;
+    cmd.direction = effectiveDirection;
     controller.sendCommand(&cmd);
     
     // Remember state
@@ -353,13 +361,19 @@ int rotationPercentToSteps(float percent, float ratio) {
     return (percent * effectiveSteps * ratio) / 100.0;
 }
 
+void enterEncoderJogMode() {
+    encoderJogMode = true;
+    lastJogEncoderValue = encoderValue;  // Explicitly set this
+    encoderValueAccumulator = 0;  // Reset accumulator
+    Serial.println("Entered encoder jog mode");
+}
+
 // Function to handle encoder jog mode
 void checkEncoderJogMode() {
     // Update last activity time
     lastMotorActivityTime = millis();
     static unsigned long lastEncoderUpdateTime = 0;
-    static long encoderValueAccumulator = 0;
-  
+
     // Exit jog mode if encoder button is pressed
     if (buttonPressed) {
         buttonPressed = false;
@@ -370,41 +384,46 @@ void checkEncoderJogMode() {
         Serial.println("Exiting encoder jog mode via button press");
         return;
     }
-  
+
     // Check for encoder movement
     if (encoderValue != lastJogEncoderValue) {
         // Calculate movement but accumulate it
         long delta = encoderValue - lastJogEncoderValue;
+        
+        // Only accumulate if not the first movement after entering jog mode
+        if (lastJogEncoderValue != encoderValue) {
+            encoderValueAccumulator += delta;
+        }
+        
+        // Always update last encoder value
         lastJogEncoderValue = encoderValue;
-        
-        // Add to accumulator
-        encoderValueAccumulator += delta;
-        
+
         // Only process movements periodically to avoid command flooding
         unsigned long currentTime = millis();
         if (currentTime - lastEncoderUpdateTime >= 50) { // 50ms debounce
             lastEncoderUpdateTime = currentTime;
-            
+
             // Only move if there's significant accumulated encoder change
             if (abs(encoderValueAccumulator) >= 1) {
                 // Scale movement by sensitivity factor
                 int moveSteps = encoderValueAccumulator * ENCODER_JOG_STEP_MULTIPLIER;
-                
-                // Apply direction setting from UI
-                if (!clockwiseDirection) {
+
+                // Apply direction setting from UI with inversion flag
+                bool effectiveDirection = INVERT_JOG_MODE_DIRECTION ? !clockwiseDirection : clockwiseDirection;
+                if (!effectiveDirection) {
                     moveSteps = -moveSteps;
                 }
-                
+
                 // Reset accumulator
                 encoderValueAccumulator = 0;
-                
+
                 // Send command to move steps with no acceleration
                 MotorCommand_t cmd;
                 cmd.cmd_type = CMD_MOVE_JOG;
                 cmd.position = moveSteps;
                 cmd.speed = speedSetting;
                 controller.sendCommand(&cmd);
-                
+
                 Serial.print("Encoder jog: ");
                 Serial.print(moveSteps);
                 Serial.println(" steps");
@@ -1117,6 +1136,7 @@ void on_manual_jog_start_clicked() {
     encoderJogMode = true;
     motorRunning = true;
     lastJogEncoderValue = encoderValue; // Start from current encoder position
+    encoderValueAccumulator = 0; // Explicitly reset the accumulator
     
     // Update UI
     lv_obj_t *start_manual_label = lv_obj_get_child(objects.start_1, 0);
