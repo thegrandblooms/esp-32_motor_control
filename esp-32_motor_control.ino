@@ -157,17 +157,19 @@ typedef struct {
     int speedSetting;          // Speed for the sequence
     bool isRunning;            // Whether sequence is currently running
     int currentStep;           // Current step in the sequence
-    bool loopSequence;         // Whether to loop continuously (optional)
+    bool loopSequence;         // Whether to loop continuously
+    float currentPosition;     // Current position of the motor
 } SequenceData_t;
 
-// Initialize with default values for all 5 positions
+// Initialize with default values
 SequenceData_t sequenceData = {
-    .positions = {0, 25, 50, 75, 100},  // Default position values for all 5 positions
+    .positions = {0, 25, 50, 75, 100},  // Default position values
     .initialDirection = true,           // Default clockwise
     .speedSetting = 0,                  // Will be set from current speed
     .isRunning = false,
     .currentStep = 0,
-    .loopSequence = false               // Optional feature
+    .loopSequence = false,
+    .currentPosition = 0.0      // Start at absolute position 0
 };
 
 // Sequence state tracking
@@ -176,9 +178,35 @@ bool lastMoveDirection = true;
 
 // Function prototypes for sequence functions
 void startSequence();
+
 void stopSequence();
+
 void moveToNextSequencePosition();
+
 void updateSequencePositionLabels();
+
+void onPositionChange() {
+    // Print detailed debug information
+    Serial.print("Current position: ");
+    Serial.print(sequenceData.currentPosition);
+    Serial.print(" (");
+    Serial.print(fmod(sequenceData.currentPosition, 100.0));
+    Serial.print("% + ");
+    Serial.print((int)(sequenceData.currentPosition / 100.0));
+    Serial.println(" rotations)");
+    
+    for (int i = 0; i < 5; i++) {
+        Serial.print("Position ");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.print(sequenceData.positions[i]);
+        Serial.print(" (");
+        Serial.print(fmod(sequenceData.positions[i], 100.0));
+        Serial.print("% + ");
+        Serial.print((int)(sequenceData.positions[i] / 100.0));
+        Serial.println(" rotations)");
+    }
+}
 
 //===============================================
 // MOTOR CONTROL FUNCTIONS
@@ -1265,7 +1293,7 @@ void on_sequence_position_clicked(int position) {
     Serial.print("Adjusting sequence position ");
     Serial.println(position);
   }
-  
+
 // Settings button handlers
 void on_settings_acceleration_clicked() {
     // If we're already in adjustment mode, exit it
@@ -1358,88 +1386,116 @@ void moveToNextSequencePosition() {
         }
     }
     
-    // Determine source and target positions
-    float sourcePosition, targetPosition;
-    int sourceRotations, targetRotations;
-    int sourceIndex, targetIndex;
+    // Determine target position (positions 1-4 correspond to array indices 1-4)
+    float targetPosition = sequenceData.positions[sequenceData.currentStep];
     
-    if (sequenceData.currentStep == 1) {
-        // First move - from reference to position 1
-        sourceIndex = 0;
-        targetIndex = 1;
-    } else if (sequenceData.currentStep == 2) {
-        // Second move - from position 1 to position 2
-        sourceIndex = 1;
-        targetIndex = 2;
-    } else if (sequenceData.currentStep == 3) {
-        // Third move - from position 2 to position 3
-        sourceIndex = 2;
-        targetIndex = 3;
-    } else { // currentStep == 4
-        // Fourth move - from position 3 to position 4
-        sourceIndex = 3;
-        targetIndex = 4;
-    }
-    
-    // Extract positions and rotation counts
-    sourcePosition = fmod(sequenceData.positions[sourceIndex], 100.0);
-    targetPosition = fmod(sequenceData.positions[targetIndex], 100.0);
-    sourceRotations = (int)(sequenceData.positions[sourceIndex] / 100.0);
-    targetRotations = (int)(sequenceData.positions[targetIndex] / 100.0);
-    
-    // Determine direction based on the step number
+    // Determine sequence direction - NEVER deviate from this
     bool moveClockwise;
     if (sequenceData.currentStep == 1) {
-        // First move: Use configured direction
         moveClockwise = sequenceData.initialDirection;
     } else if (sequenceData.currentStep == 2) {
-        // Second move: Opposite of configured direction
         moveClockwise = !sequenceData.initialDirection;
     } else if (sequenceData.currentStep == 3) {
-        // Third move: Same as configured direction
         moveClockwise = sequenceData.initialDirection;
     } else { // currentStep == 4
-        // Fourth move: Opposite of configured direction
         moveClockwise = !sequenceData.initialDirection;
     }
     
-    // Calculate movement percentage
+    Serial.print("Step ");
+    Serial.print(sequenceData.currentStep);
+    Serial.print(", Direction: ");
+    Serial.print(moveClockwise ? "CW" : "CCW");
+    Serial.print(", From: ");
+    Serial.print(sequenceData.currentPosition);
+    Serial.print(", To: ");
+    Serial.println(targetPosition);
+    
+    // Check if we're already at the exact target position
+    if (abs(sequenceData.currentPosition - targetPosition) < 0.1) {
+        Serial.println("Already at exact target position - no movement needed");
+        return;
+    }
+    
+    // Get the normalized positions (0-100 range)
+    float currentNormalized = fmod(sequenceData.currentPosition, 100.0);
+    if (currentNormalized < 0) currentNormalized += 100.0;
+    
+    float targetNormalized = fmod(targetPosition, 100.0);
+    if (targetNormalized < 0) targetNormalized += 100.0;
+    
+    // Calculate how many steps to move
     float movementPercent;
     
-    // Handle same-position case (no rotation by default)
-    if (abs(targetPosition - sourcePosition) < 0.1 && sourceRotations == targetRotations) {
-        movementPercent = 100.0; // Do one full rotation
-    }
-    // Calculate movement based on direction and positions
-    else {
+    // Check if we're at the same angular position
+    if (abs(currentNormalized - targetNormalized) < 0.1) {
+        // Same angular position
+        int currentRotations = (int)(sequenceData.currentPosition / 100.0);
+        int targetRotations = (int)(targetPosition / 100.0);
+        
+        // If both the angular position and rotation count match, we're done
+        if (currentRotations == targetRotations) {
+            Serial.println("Already at exact target position - no movement needed");
+            return;
+        }
+        
+        // We need to add/subtract full rotations
+        // When moving clockwise, we add; when moving counter-clockwise, we subtract
         if (moveClockwise) {
-            // For clockwise movement
-            if (targetPosition > sourcePosition) {
-                movementPercent = targetPosition - sourcePosition;
+            // When moving clockwise, we need to add rotations no matter what
+            // If target has fewer rotations, we need to add enough to go "all the way around"
+            if (targetRotations > currentRotations) {
+                // Direct path
+                movementPercent = (targetRotations - currentRotations) * 100.0;
             } else {
-                movementPercent = (100 - sourcePosition) + targetPosition;
+                // Need to go all the way around (add enough to complete a circle)
+                // This is just a placeholder - we'd need more complex logic here
+                movementPercent = ((currentRotations + 1) - targetRotations) * 100.0;
             }
         } else {
-            // For counter-clockwise movement
-            if (targetPosition < sourcePosition) {
-                movementPercent = sourcePosition - targetPosition;
+            // When moving counter-clockwise, we subtract rotations
+            // If target has more rotations, we subtract enough to go "all the way around"
+            if (targetRotations < currentRotations) {
+                // Direct path
+                movementPercent = (currentRotations - targetRotations) * 100.0;
             } else {
-                movementPercent = sourcePosition + (100 - targetPosition);
+                // Need to go all the way around (subtract enough to complete a circle)
+                // This is just a placeholder - we'd need more complex logic here
+                movementPercent = ((targetRotations + 1) - currentRotations) * 100.0;
+            }
+        }
+    } else {
+        // Different angular positions - calculate normal movement
+        if (moveClockwise) {
+            if (targetNormalized > currentNormalized) {
+                // Direct path
+                movementPercent = targetNormalized - currentNormalized;
+            } else {
+                // Need to go "the long way around"
+                movementPercent = (100.0 - currentNormalized) + targetNormalized;
+            }
+        } else {
+            if (targetNormalized < currentNormalized) {
+                // Direct path
+                movementPercent = currentNormalized - targetNormalized;
+            } else {
+                // Need to go "the long way around"
+                movementPercent = currentNormalized + (100.0 - targetNormalized);
             }
         }
         
-        // Add rotation difference to movement percentage
-        int rotationDifference = targetRotations - sourceRotations;
-        if (rotationDifference != 0) {
-            // For clockwise movement, add positive rotations
-            // For counter-clockwise movement, subtract positive rotations
-            if (moveClockwise) {
-                movementPercent += (rotationDifference * 100.0);
-            } else {
-                // If we're moving CCW, but target has more rotations,
-                // we need to do full rotations in CCW direction
-                movementPercent += (abs(rotationDifference) * 100.0);
+        // Add rotations if needed
+        int currentRotations = (int)(sequenceData.currentPosition / 100.0);
+        int targetRotations = (int)(targetPosition / 100.0);
+        
+        if (currentRotations != targetRotations) {
+            if (moveClockwise && targetRotations > currentRotations) {
+                // Add rotations when moving clockwise and target has more
+                movementPercent += (targetRotations - currentRotations) * 100.0;
+            } else if (!moveClockwise && targetRotations < currentRotations) {
+                // Add rotations when moving counter-clockwise and target has fewer
+                movementPercent += (currentRotations - targetRotations) * 100.0;
             }
+            // For other combinations, the movement already accounts for the rotation difference
         }
     }
     
@@ -1453,26 +1509,13 @@ void moveToNextSequencePosition() {
     cmd.speed = sequenceData.speedSetting;
     controller.sendCommand(&cmd);
     
-    // Logging for monitoring
-    Serial.print("Sequence step ");
-    Serial.print(sequenceData.currentStep);
-    Serial.print(": ");
-    Serial.print(sequenceData.positions[sourceIndex]);
-    Serial.print(" (");
-    Serial.print(sourcePosition);
-    Serial.print("% +");
-    Serial.print(sourceRotations);
-    Serial.print(" rot.) -> ");
-    Serial.print(sequenceData.positions[targetIndex]);
-    Serial.print(" (");
-    Serial.print(targetPosition);
-    Serial.print("% +");
-    Serial.print(targetRotations);
-    Serial.print(" rot.), moving ");
+    // Update current position
+    sequenceData.currentPosition = targetPosition;
+    
+    Serial.print("Moving ");
     Serial.print(movementPercent);
     Serial.print("% ");
-    Serial.print(moveClockwise ? "CW" : "CCW");
-    Serial.println();
+    Serial.println(moveClockwise ? "CW" : "CCW");
 }
 
 void startSequence() {
@@ -1485,9 +1528,10 @@ void startSequence() {
     sequenceData.isRunning = true;
     sequenceData.currentStep = 0;  // Start with current step as 0
     sequenceData.speedSetting = speedSetting;
+    sequenceData.currentPosition = sequenceData.positions[0];  // Start at position 0's value
     motorRunning = true;
     
-    // Move to the first position in the sequence (position 1)
+    // Move to the first position in the sequence
     moveToNextSequencePosition();
     
     update_ui_labels();
