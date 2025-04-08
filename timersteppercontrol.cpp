@@ -72,6 +72,40 @@ void TimerStepperControl::init() {
     ESP_ERROR_CHECK(gptimer_start(_gptimer));
 }
 
+// Function for clearing move queue
+void TimerStepperControl::clearCommandQueue() {
+    // Stop the motor immediately
+    _isRunning = false;
+    _isContinuous = false;
+    _jogMode = false;
+    _currentSpeed = 0;
+    _stepAccumulator = 0.0f;
+    
+    // Empty the queue if it exists
+    if (_commandQueue != NULL) {
+        // Create a dummy command to receive and discard items
+        MotorCommand_t dummyCmd;
+        
+        // Empty the queue by receiving all available items
+        while (xQueueReceive(_commandQueue, &dummyCmd, 0) == pdTRUE) {
+            // Just discard the commands
+        }
+    }
+}
+
+void TimerStepperControl::resetMotorState() {
+    // Reset all state variables
+    _isRunning = false;
+    _isContinuous = false;
+    _jogMode = false;
+    _currentSpeed = 0.0f;
+    _stepAccumulator = 0.0f;
+    
+    // Very important: reset the timestamp to prevent elapsed time jumps
+    _lastAccelUpdateTime = micros();
+    _lastStepTime = _lastAccelUpdateTime;
+}
+
 // Timer callback (ISR)
 bool IRAM_ATTR TimerStepperControl::timerCallback(gptimer_handle_t timer, 
         const gptimer_alarm_event_data_t *edata, 

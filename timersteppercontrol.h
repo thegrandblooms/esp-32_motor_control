@@ -1,4 +1,4 @@
-// TimerStepperControl.h - Fixed version
+// TimerStepperControl.h
 #ifndef TIMER_STEPPER_CONTROL_H
 #define TIMER_STEPPER_CONTROL_H
 
@@ -41,6 +41,9 @@ public:
     
     // Initialize hardware timer and FreeRTOS components
     void init();
+
+    void clearCommandQueue();
+    void resetMotorState();
     
     // Send a command to the motor control task
     bool sendCommand(MotorCommand_t* cmd);

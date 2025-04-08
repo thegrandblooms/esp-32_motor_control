@@ -112,6 +112,8 @@ bool ultraFineAdjustmentMode = false;  // For 0.01% precision adjustments
 bool encoderJogMode = false;
 long lastJogEncoderValue = 0;            // Track encoder position for jog mode
 static long encoderValueAccumulator = 0;
+static bool isFirstJogCheck = true;
+static unsigned long jogModeEntryTime = 0;
 
 // Current settings (these get converted to/from user-friendly units)
 int targetSteps;                         // Target steps to move
@@ -152,8 +154,260 @@ void on_settings_microstepping_clicked();
 void on_back_clicked();
 
 //===============================================
-// SEQUENCE MODE CONFIGURATION
+// MOTOR CONTROL FUNCTIONS
 //===============================================
+void startStepperMotion(int steps, bool clockwise, int speed) {
+    // Ensure motor is in a clean state before starting
+    if (motorRunning) {
+        safelyStopAndResetMotor();
+        delay(25); // Small delay to ensure reset is complete
+    }
+    
+    // Wake the driver if it's using DRV8825
+    #if USE_DRV8825_DRIVER
+    controller.wake();
+    #endif
+    
+    // Set direction and steps with inversion flag
+    bool effectiveDirection = INVERT_STEP_MODE_DIRECTION ? !clockwise : clockwise;
+    int relativeSteps = effectiveDirection ? steps : -steps;
+    
+    // Send command to move
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_MOVE_STEPS;
+    cmd.position = relativeSteps;
+    cmd.speed = speed;
+    cmd.direction = effectiveDirection;
+    controller.sendCommand(&cmd);
+    
+    // Remember state
+    continuousMode = false;
+    motorRunning = true;
+    lastMotorActivityTime = millis();
+    
+    // Update UI to reflect motor running state
+    update_ui_labels();
+    
+    Serial.print("Starting stepper motion: ");
+    Serial.print(steps);
+    Serial.print(" steps, direction: ");
+    Serial.print(clockwise ? "clockwise" : "counterclockwise");
+    Serial.print(", speed: ");
+    Serial.println(speed);
+}
+
+void startContinuousRotation(bool clockwise, int speed) {
+    // Ensure motor is in a clean state before starting
+    if (motorRunning) {
+        safelyStopAndResetMotor();
+        delay(25); // Small delay to ensure reset is complete
+    }
+    
+    // Wake the driver if it's using DRV8825
+    #if USE_DRV8825_DRIVER
+    controller.wake();
+    #endif
+    
+    // Apply direction inversion if configured
+    bool effectiveDirection = INVERT_CONTINUOUS_MODE_DIRECTION ? !clockwise : clockwise;
+    
+    // Send command for continuous rotation
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_START_CONTINUOUS;
+    cmd.speed = speed;
+    cmd.direction = effectiveDirection;
+    controller.sendCommand(&cmd);
+    
+    // Remember state
+    continuousMode = true;
+    motorRunning = true;
+    lastMotorActivityTime = millis();
+    
+    // Update UI to reflect motor running state
+    update_ui_labels();
+    
+    Serial.print("Starting continuous rotation, direction: ");
+    Serial.print(clockwise ? "clockwise" : "counterclockwise");
+    Serial.print(", speed: ");
+    Serial.println(speed);
+}
+
+void enterEncoderJogMode() {
+    encoderJogMode = true;
+    lastJogEncoderValue = encoderValue;  // Explicitly set this
+    encoderValueAccumulator = 0;  // Reset accumulator
+    Serial.println("Entered encoder jog mode");
+}
+
+void checkEncoderJogMode() {
+    // Update last activity time
+    lastMotorActivityTime = millis();
+    static unsigned long lastEncoderUpdateTime = 0;
+    
+    // Initialize entry time on first call
+    if (isFirstJogCheck) {
+        jogModeEntryTime = millis();
+        isFirstJogCheck = false;
+        return; // Skip first check to allow mode to stabilize
+    }
+    
+    // Add debounce period after entering jog mode
+    if (millis() - jogModeEntryTime < 100) {
+        return; // Wait 100ms before processing any encoder movements
+    }
+
+    // Exit jog mode if encoder button is pressed
+    if (buttonPressed) {
+        buttonPressed = false;
+        encoderJogMode = false;
+        motorRunning = false;
+        stopMotor();
+        update_ui_labels();
+        Serial.println("Exiting encoder jog mode via button press");
+        isFirstJogCheck = true; // Reset for next time
+        return;
+    }
+
+    // Check for encoder movement
+    if (encoderValue != lastJogEncoderValue) {
+        // Calculate movement but accumulate it
+        long delta = encoderValue - lastJogEncoderValue;
+        
+        // Only accumulate if not the first movement after entering jog mode
+        if (lastJogEncoderValue != encoderValue) {
+            encoderValueAccumulator += delta;
+        }
+        
+        // Always update last encoder value
+        lastJogEncoderValue = encoderValue;
+
+        // Only process movements periodically to avoid command flooding
+        unsigned long currentTime = millis();
+        if (currentTime - lastEncoderUpdateTime >= 50) { // 50ms debounce
+            lastEncoderUpdateTime = currentTime;
+
+            // Only move if there's significant accumulated encoder change
+            if (abs(encoderValueAccumulator) >= 1) {
+                // Scale movement by sensitivity factor
+                int moveSteps = encoderValueAccumulator * ENCODER_JOG_STEP_MULTIPLIER;
+
+                // Apply direction setting from UI with inversion flag
+                bool effectiveDirection = INVERT_JOG_MODE_DIRECTION ? !clockwiseDirection : clockwiseDirection;
+                if (!effectiveDirection) {
+                    moveSteps = -moveSteps;
+                }
+
+                // Reset accumulator
+                encoderValueAccumulator = 0;
+
+                // Send command to move steps with no acceleration
+                MotorCommand_t cmd;
+                cmd.cmd_type = CMD_MOVE_JOG;
+                cmd.position = moveSteps;
+                cmd.speed = speedSetting;
+                controller.sendCommand(&cmd);
+
+                Serial.print("Encoder jog: ");
+                Serial.print(moveSteps);
+                Serial.println(" steps");
+            }
+        }
+    }
+}
+
+void stopMotor() {
+    // Use our new safe stopping function
+    safelyStopAndResetMotor();
+    
+    // Put driver to sleep to save power if power save is enabled
+    if (enableMotorPowerSave) {
+        #if USE_DRV8825_DRIVER
+        controller.sleep();
+        #endif
+    }
+    
+    // Update UI to reflect motor stopped state
+    update_ui_labels();
+    
+    Serial.println("Motor stopped");
+}
+
+void safelyStopAndResetMotor() {
+    // First stop the motor
+    MotorCommand_t cmd;
+    cmd.cmd_type = CMD_STOP_MOTOR;
+    controller.sendCommand(&cmd);
+    
+    // Wait for the command to be processed
+    delay(25);
+    
+    // Now explicitly reset the controller state
+    controller.resetMotorState();
+    
+    // Update state variables
+    motorRunning = false;
+    continuousMode = false;
+    encoderJogMode = false;
+}
+
+// Helper functions for unit conversions
+int getEffectiveStepsPerRevolution() {
+    #if USE_DRV8825_DRIVER
+    // Get current microstepping mode from the driver
+    int microstepMode = driver.getMicrostepMode();
+    return BASE_STEPS_PER_REVOLUTION * microstepMode;
+    #else
+    // For drivers without microstepping, use base steps
+    return BASE_STEPS_PER_REVOLUTION;
+    #endif
+}
+
+float stepsToRPM(int stepsPerSecond, float ratio) {
+    // Convert steps/second to RPM at the output shaft
+    int effectiveSteps = getEffectiveStepsPerRevolution();
+    return (stepsPerSecond * 60.0) / (effectiveSteps * ratio);
+}
+
+float rpmToSteps(float rpm, float ratio) {
+    // Convert RPM to steps/second
+    int effectiveSteps = getEffectiveStepsPerRevolution();
+    return (rpm * effectiveSteps * ratio) / 60.0f;
+}
+
+int safeRoundStepsPerSec(float stepsPerSec) {
+    if (stepsPerSec <= 0) return 0;  // Handle zero/negative case
+    return max(1, (int)round(stepsPerSec));  // Never round down to zero
+}
+
+float stepsToRotationPercent(int steps, float ratio) {
+    // Convert steps to percentage of output shaft rotation
+    int effectiveSteps = getEffectiveStepsPerRevolution();
+    return (steps * 100.0) / (effectiveSteps * ratio);
+}
+
+int rotationPercentToSteps(float percent, float ratio) {
+    // Convert percentage of rotation to steps
+    int effectiveSteps = getEffectiveStepsPerRevolution();
+    return (percent * effectiveSteps * ratio) / 100.0;
+}
+
+// Function to calculate maximum RPM based on current microstepping
+float getMaxRpmForCurrentMicrostepping() {
+    int microstepMode = driver.getMicrostepMode();
+    float maxStepsPerSec = 4000.0f; // Based on 0.25ms timer
+    int effectiveStepsPerRev = BASE_STEPS_PER_REVOLUTION * microstepMode * gearRatio;
+    
+    // Calculate theoretical max based on timer frequency
+    float theoreticalMax = (maxStepsPerSec * 60.0f) / effectiveStepsPerRev;
+    
+    // Return the lower of the theoretical max or hardware MAX_RPM
+    return min(theoreticalMax, (float)MAX_RPM);
+}
+
+//===============================================
+// SEQUENCE MODE
+//===============================================
+
 // Define sequence data structure
 typedef struct {
     float positions[5];        // Position values (0-4)
@@ -212,237 +466,159 @@ void onPositionChange() {
     }
 }
 
-//===============================================
-// MOTOR CONTROL FUNCTIONS
-//===============================================
-void startStepperMotion(int steps, bool clockwise, int speed) {
-    // If motor is already running, stop it
-    if (motorRunning) {
-        MotorCommand_t cmd;
-        cmd.cmd_type = CMD_STOP_MOTOR;
-        controller.sendCommand(&cmd);
-        motorRunning = false;
-        update_ui_labels();
+// Motor control code
+void moveToNextSequencePosition() {
+    // Increment step counter
+    sequenceData.currentStep++;
+    
+    // Check if we've reached the end
+    if (sequenceData.currentStep >= 5) {
+        if (sequenceData.loopSequence) {
+            sequenceData.currentStep = 1; // Loop back to position 1
+        } else {
+            stopSequence();
+            return;
+        }
+    }
+    
+    // Get current and target positions
+    float currentPosition = sequenceData.currentPosition;
+    float targetPosition = sequenceData.positions[sequenceData.currentStep];
+    
+    // Determine direction (alternating based on step)
+    bool moveClockwise;
+    if (sequenceData.currentStep % 2 == 1) {
+        moveClockwise = sequenceData.initialDirection;
+    } else {
+        moveClockwise = !sequenceData.initialDirection;
+    }
+    
+    // Extract normalized positions (0-99%)
+    float currentNormalized = fmod(currentPosition, 100.0);
+    if (currentNormalized < 0) currentNormalized += 100.0;
+    
+    float targetNormalized = fmod(targetPosition, 100.0);
+    if (targetNormalized < 0) targetNormalized += 100.0;
+    
+    // Calculate the angular movement needed
+    float angularMovement = 0;
+    
+    // For clockwise movement
+    if (moveClockwise) {
+        if (targetNormalized >= currentNormalized) {
+            angularMovement = targetNormalized - currentNormalized;
+        } else {
+            angularMovement = (100.0 - currentNormalized) + targetNormalized;
+        }
+    } 
+    // For counter-clockwise movement
+    else {
+        if (targetNormalized <= currentNormalized) {
+            angularMovement = currentNormalized - targetNormalized;
+        } else {
+            angularMovement = currentNormalized + (100.0 - targetNormalized);
+        }
+    }
+    
+    // Extract rotation counts
+    int targetRotations = floor(targetPosition / 100.0);
+    float rotationMovement = targetRotations * 100.0;
+    
+    // Calculate total movement
+    float totalMovement = angularMovement + rotationMovement;
+    
+    // Skip if no movement needed
+    if (totalMovement < 0.1) {
+        Serial.println("Already at target position - no movement needed");
         return;
     }
     
-    // Wake the driver if it's using DRV8825
-    #if USE_DRV8825_DRIVER
-    controller.wake();
-    #endif
+    // Calculate steps
+    int stepsToMove = rotationPercentToSteps(totalMovement, gearRatio);
     
-    // Set direction and steps with inversion flag
-    bool effectiveDirection = INVERT_STEP_MODE_DIRECTION ? !clockwise : clockwise;
-    int relativeSteps = effectiveDirection ? steps : -steps;
-    
-    // Send command to move
+    // Execute movement
     MotorCommand_t cmd;
     cmd.cmd_type = CMD_MOVE_STEPS;
-    cmd.position = relativeSteps;
-    cmd.speed = speed;
-    cmd.direction = effectiveDirection;
+    cmd.position = moveClockwise ? -stepsToMove : stepsToMove;
+    cmd.speed = sequenceData.speedSetting;
     controller.sendCommand(&cmd);
     
-    // Remember state
-    continuousMode = false;
-    motorRunning = true;
-    lastMotorActivityTime = millis();
+    // Update current position
+    sequenceData.currentPosition = targetPosition;
     
-    // Update UI to reflect motor running state
-    update_ui_labels();
-    
-    Serial.print("Starting stepper motion: ");
-    Serial.print(steps);
-    Serial.print(" steps, direction: ");
-    Serial.print(clockwise ? "clockwise" : "counterclockwise");
-    Serial.print(", speed: ");
-    Serial.println(speed);
+    Serial.print("Moving ");
+    Serial.print(totalMovement);
+    Serial.print("% ");
+    Serial.println(moveClockwise ? "CW" : "CCW");
 }
 
-void startContinuousRotation(bool clockwise, int speed) {
-    // If motor is already running, stop it
+void startSequence() {
     if (motorRunning) {
-        MotorCommand_t cmd;
-        cmd.cmd_type = CMD_STOP_MOTOR;
-        controller.sendCommand(&cmd);
-        motorRunning = false;
-        update_ui_labels();
-        return;
-    }
-    
-    // Wake the driver if it's using DRV8825
-    #if USE_DRV8825_DRIVER
-    controller.wake();
-    #endif
-    
-    // Apply direction inversion if configured
-    bool effectiveDirection = INVERT_CONTINUOUS_MODE_DIRECTION ? !clockwise : clockwise;
-    
-    // Send command for continuous rotation
-    MotorCommand_t cmd;
-    cmd.cmd_type = CMD_START_CONTINUOUS;
-    cmd.speed = speed;
-    cmd.direction = effectiveDirection;
-    controller.sendCommand(&cmd);
-    
-    // Remember state
-    continuousMode = true;
-    motorRunning = true;
-    lastMotorActivityTime = millis();
-    
-    // Update UI to reflect motor running state
-    update_ui_labels();
-    
-    Serial.print("Starting continuous rotation, direction: ");
-    Serial.print(clockwise ? "clockwise" : "counterclockwise");
-    Serial.print(", speed: ");
-    Serial.println(speed);
-}
-
-void stopMotor() {
-    // Send stop command
-    MotorCommand_t cmd;
-    cmd.cmd_type = CMD_STOP_MOTOR;
-    controller.sendCommand(&cmd);
-    
-    motorRunning = false;
-    
-    // Put driver to sleep to save power if power save is enabled
-    if (enableMotorPowerSave) {
-        #if USE_DRV8825_DRIVER
-        controller.sleep();
-        #endif
-    }
-    
-    // Update UI to reflect motor stopped state
-    update_ui_labels();
-    
-    Serial.println("Motor stopped");
-}
-
-// Helper functions for unit conversions
-int getEffectiveStepsPerRevolution() {
-    #if USE_DRV8825_DRIVER
-    // Get current microstepping mode from the driver
-    int microstepMode = driver.getMicrostepMode();
-    return BASE_STEPS_PER_REVOLUTION * microstepMode;
-    #else
-    // For drivers without microstepping, use base steps
-    return BASE_STEPS_PER_REVOLUTION;
-    #endif
-}
-
-float stepsToRPM(int stepsPerSecond, float ratio) {
-    // Convert steps/second to RPM at the output shaft
-    int effectiveSteps = getEffectiveStepsPerRevolution();
-    return (stepsPerSecond * 60.0) / (effectiveSteps * ratio);
-}
-
-float rpmToSteps(float rpm, float ratio) {
-    // Convert RPM to steps/second
-    int effectiveSteps = getEffectiveStepsPerRevolution();
-    return (rpm * effectiveSteps * ratio) / 60.0f;
-}
-
-int safeRoundStepsPerSec(float stepsPerSec) {
-    if (stepsPerSec <= 0) return 0;  // Handle zero/negative case
-    return max(1, (int)round(stepsPerSec));  // Never round down to zero
-}
-
-float stepsToRotationPercent(int steps, float ratio) {
-    // Convert steps to percentage of output shaft rotation
-    int effectiveSteps = getEffectiveStepsPerRevolution();
-    return (steps * 100.0) / (effectiveSteps * ratio);
-}
-
-int rotationPercentToSteps(float percent, float ratio) {
-    // Convert percentage of rotation to steps
-    int effectiveSteps = getEffectiveStepsPerRevolution();
-    return (percent * effectiveSteps * ratio) / 100.0;
-}
-
-void enterEncoderJogMode() {
-    encoderJogMode = true;
-    lastJogEncoderValue = encoderValue;  // Explicitly set this
-    encoderValueAccumulator = 0;  // Reset accumulator
-    Serial.println("Entered encoder jog mode");
-}
-
-// Function to handle encoder jog mode
-void checkEncoderJogMode() {
-    // Update last activity time
-    lastMotorActivityTime = millis();
-    static unsigned long lastEncoderUpdateTime = 0;
-
-    // Exit jog mode if encoder button is pressed
-    if (buttonPressed) {
-        buttonPressed = false;
-        encoderJogMode = false;
-        motorRunning = false;
         stopMotor();
-        update_ui_labels();
-        Serial.println("Exiting encoder jog mode via button press");
         return;
     }
-
-    // Check for encoder movement
-    if (encoderValue != lastJogEncoderValue) {
-        // Calculate movement but accumulate it
-        long delta = encoderValue - lastJogEncoderValue;
-        
-        // Only accumulate if not the first movement after entering jog mode
-        if (lastJogEncoderValue != encoderValue) {
-            encoderValueAccumulator += delta;
-        }
-        
-        // Always update last encoder value
-        lastJogEncoderValue = encoderValue;
-
-        // Only process movements periodically to avoid command flooding
-        unsigned long currentTime = millis();
-        if (currentTime - lastEncoderUpdateTime >= 50) { // 50ms debounce
-            lastEncoderUpdateTime = currentTime;
-
-            // Only move if there's significant accumulated encoder change
-            if (abs(encoderValueAccumulator) >= 1) {
-                // Scale movement by sensitivity factor
-                int moveSteps = encoderValueAccumulator * ENCODER_JOG_STEP_MULTIPLIER;
-
-                // Apply direction setting from UI with inversion flag
-                bool effectiveDirection = INVERT_JOG_MODE_DIRECTION ? !clockwiseDirection : clockwiseDirection;
-                if (!effectiveDirection) {
-                    moveSteps = -moveSteps;
-                }
-
-                // Reset accumulator
-                encoderValueAccumulator = 0;
-
-                // Send command to move steps with no acceleration
-                MotorCommand_t cmd;
-                cmd.cmd_type = CMD_MOVE_JOG;
-                cmd.position = moveSteps;
-                cmd.speed = speedSetting;
-                controller.sendCommand(&cmd);
-
-                Serial.print("Encoder jog: ");
-                Serial.print(moveSteps);
-                Serial.println(" steps");
-            }
-        }
-    }
+    
+    // Initialize sequence
+    sequenceData.isRunning = true;
+    sequenceData.currentStep = 0;  // Start with current step as 0
+    sequenceData.speedSetting = speedSetting;
+    sequenceData.currentPosition = sequenceData.positions[0];  // Start at position 0's value
+    motorRunning = true;
+    
+    // Move to the first position in the sequence
+    moveToNextSequencePosition();
+    
+    update_ui_labels();
 }
 
-// Function to calculate maximum RPM based on current microstepping
-float getMaxRpmForCurrentMicrostepping() {
-    int microstepMode = driver.getMicrostepMode();
-    float maxStepsPerSec = 4000.0f; // Based on 0.25ms timer
-    int effectiveStepsPerRev = BASE_STEPS_PER_REVOLUTION * microstepMode * gearRatio;
+// Stop sequence execution
+void stopSequence() {
+    sequenceData.isRunning = false;
+    motorRunning = false;
+    stopMotor();
+    update_ui_labels();
+}
+
+// Update the display of sequence position values
+void updateSequencePositionLabels() {
+    lv_obj_t *posButtons[5] = {
+        objects.sequence_position_0_button,
+        objects.sequence_position_1_button,
+        objects.sequence_position_2_button,
+        objects.sequence_position_3_button,
+        objects.sequence_position_4_button
+    };
     
-    // Calculate theoretical max based on timer frequency
-    float theoreticalMax = (maxStepsPerSec * 60.0f) / effectiveStepsPerRev;
-    
-    // Return the lower of the theoretical max or hardware MAX_RPM
-    return min(theoreticalMax, (float)MAX_RPM);
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *label = lv_obj_get_child(posButtons[i], 0);
+        if (label) {
+            char buffer[30];
+            float value = sequenceData.positions[i];
+            int rotations = (int)(value / 100.0);
+            float normalizedPos = fmod(value, 100.0);
+            
+            // Format string based on rotation count
+            if (rotations > 0) {
+                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%% +%d rot.", 
+                            i, normalizedPos, rotations);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%% +%d rot.", 
+                            i, normalizedPos, rotations);
+                }
+            } else {
+                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
+                            i, normalizedPos);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
+                            i, normalizedPos);
+                }
+            }
+            
+            lv_label_set_text(label, buffer);
+        }
+    }
 }
 
 //===============================================
@@ -1055,7 +1231,8 @@ void update_ui_labels() {
 // Common back button handler
 void on_back_clicked() {
     // Stop the motor when going back to main screen
-    stopMotor();
+    safelyStopAndResetMotor();
+    
     // If coming from settings page, make sure to update values
     if (currentScreenIndex == 6) { // Settings page
         // Recalculate speed and steps based on current user-friendly values
@@ -1072,12 +1249,17 @@ void on_back_clicked() {
     }
 }
 
-// When Move Steps screen buttons are pressed
+// Move Steps Functions
 void on_move_steps_start_clicked() {
     // Toggle between start and stop
     if (motorRunning) {
-        stopMotor();
+        safelyStopAndResetMotor();
+        update_ui_labels();
     } else {
+        // Make sure we start from a clean state
+        safelyStopAndResetMotor();
+        delay(25); // Small delay to ensure reset is complete
+        
         startStepperMotion(targetSteps, clockwiseDirection, speedSetting);
     }
 }
@@ -1115,28 +1297,31 @@ void on_move_steps_steps_clicked() {
     Serial.println(targetSteps);
 }
 
-// When Manual Jog screen buttons are pressed
+// Manual Jog Functions
 void on_manual_jog_start_clicked() {
     // If already in encoder jog mode, exit it
     if (encoderJogMode) {
-        encoderJogMode = false;
-        motorRunning = false;
-        stopMotor();
+        safelyStopAndResetMotor();
         update_ui_labels();
         return;
     }
     
-    // If motor is running in standard mode, stop it
+    // If motor is running in any other mode, stop it
     if (motorRunning) {
-        stopMotor();
+        safelyStopAndResetMotor();
+        update_ui_labels();
+        delay(50); // Ensure complete stop before continuing
         return;
     }
     
-    // Enter encoder jog mode
+    // Make sure we start from a clean state
+    safelyStopAndResetMotor();
+    
+    // Now set up jog mode with fresh state
     encoderJogMode = true;
     motorRunning = true;
-    lastJogEncoderValue = encoderValue; // Start from current encoder position
-    encoderValueAccumulator = 0; // Explicitly reset the accumulator
+    lastJogEncoderValue = encoderValue;
+    encoderValueAccumulator = 0;
     
     // Update UI
     lv_obj_t *start_manual_label = lv_obj_get_child(objects.start_1, 0);
@@ -1174,12 +1359,17 @@ void on_manual_jog_speed_clicked() {
     }
 }
 
-// When Continuous Rotation screen buttons are pressed
+// Continuous Rotation Mode Functions
 void on_continuous_rotation_start_clicked() {
     // Toggle between start and stop
     if (motorRunning) {
-        stopMotor();
+        safelyStopAndResetMotor();
+        update_ui_labels();
     } else {
+        // Make sure we start from a clean state
+        safelyStopAndResetMotor();
+        delay(25); // Small delay to ensure reset is complete
+        
         startContinuousRotation(clockwiseDirection, speedSetting);
     }
 }
@@ -1227,11 +1417,15 @@ void on_continuous_rotation_speed_clicked() {
     }
 }
 
-// Sequence screen button handlers
+// Sequence Mode Functions
 void on_sequence_start_clicked() {
     if (sequenceData.isRunning) {
         stopSequence();
     } else {
+        // Make sure we start from a clean state
+        safelyStopAndResetMotor();
+        delay(25); // Small delay to ensure reset is complete
+        
         startSequence();
     }
 }
@@ -1400,164 +1594,6 @@ void on_settings_microstepping_clicked() {
         update_ui_labels();
     }
     #endif
-}
-
-//===============================================
-// SEQUENCE MODE FUNCTIONS
-//===============================================
-// Calculate and execute the next position movement
-void moveToNextSequencePosition() {
-    // Increment step counter
-    sequenceData.currentStep++;
-    
-    // Check if we've reached the end
-    if (sequenceData.currentStep >= 5) {
-        if (sequenceData.loopSequence) {
-            sequenceData.currentStep = 1; // Loop back to position 1
-        } else {
-            stopSequence();
-            return;
-        }
-    }
-    
-    // Get current and target positions
-    float currentPosition = sequenceData.currentPosition;
-    float targetPosition = sequenceData.positions[sequenceData.currentStep];
-    
-    // Determine direction (alternating based on step)
-    bool moveClockwise;
-    if (sequenceData.currentStep % 2 == 1) {
-        moveClockwise = sequenceData.initialDirection;
-    } else {
-        moveClockwise = !sequenceData.initialDirection;
-    }
-    
-    // Extract normalized positions (0-99%)
-    float currentNormalized = fmod(currentPosition, 100.0);
-    if (currentNormalized < 0) currentNormalized += 100.0;
-    
-    float targetNormalized = fmod(targetPosition, 100.0);
-    if (targetNormalized < 0) targetNormalized += 100.0;
-    
-    // Calculate the angular movement needed
-    float angularMovement = 0;
-    
-    // For clockwise movement
-    if (moveClockwise) {
-        if (targetNormalized >= currentNormalized) {
-            angularMovement = targetNormalized - currentNormalized;
-        } else {
-            angularMovement = (100.0 - currentNormalized) + targetNormalized;
-        }
-    } 
-    // For counter-clockwise movement
-    else {
-        if (targetNormalized <= currentNormalized) {
-            angularMovement = currentNormalized - targetNormalized;
-        } else {
-            angularMovement = currentNormalized + (100.0 - targetNormalized);
-        }
-    }
-    
-    // Extract rotation counts
-    int targetRotations = floor(targetPosition / 100.0);
-    float rotationMovement = targetRotations * 100.0;
-    
-    // Calculate total movement
-    float totalMovement = angularMovement + rotationMovement;
-    
-    // Skip if no movement needed
-    if (totalMovement < 0.1) {
-        Serial.println("Already at target position - no movement needed");
-        return;
-    }
-    
-    // Calculate steps
-    int stepsToMove = rotationPercentToSteps(totalMovement, gearRatio);
-    
-    // Execute movement
-    MotorCommand_t cmd;
-    cmd.cmd_type = CMD_MOVE_STEPS;
-    cmd.position = moveClockwise ? -stepsToMove : stepsToMove;
-    cmd.speed = sequenceData.speedSetting;
-    controller.sendCommand(&cmd);
-    
-    // Update current position
-    sequenceData.currentPosition = targetPosition;
-    
-    Serial.print("Moving ");
-    Serial.print(totalMovement);
-    Serial.print("% ");
-    Serial.println(moveClockwise ? "CW" : "CCW");
-}
-
-void startSequence() {
-    if (motorRunning) {
-        stopMotor();
-        return;
-    }
-    
-    // Initialize sequence
-    sequenceData.isRunning = true;
-    sequenceData.currentStep = 0;  // Start with current step as 0
-    sequenceData.speedSetting = speedSetting;
-    sequenceData.currentPosition = sequenceData.positions[0];  // Start at position 0's value
-    motorRunning = true;
-    
-    // Move to the first position in the sequence
-    moveToNextSequencePosition();
-    
-    update_ui_labels();
-}
-
-// Stop sequence execution
-void stopSequence() {
-    sequenceData.isRunning = false;
-    motorRunning = false;
-    stopMotor();
-    update_ui_labels();
-}
-
-// Update the display of sequence position values
-void updateSequencePositionLabels() {
-    lv_obj_t *posButtons[5] = {
-        objects.sequence_position_0_button,
-        objects.sequence_position_1_button,
-        objects.sequence_position_2_button,
-        objects.sequence_position_3_button,
-        objects.sequence_position_4_button
-    };
-    
-    for (int i = 0; i < 5; i++) {
-        lv_obj_t *label = lv_obj_get_child(posButtons[i], 0);
-        if (label) {
-            char buffer[30];
-            float value = sequenceData.positions[i];
-            int rotations = (int)(value / 100.0);
-            float normalizedPos = fmod(value, 100.0);
-            
-            // Format string based on rotation count
-            if (rotations > 0) {
-                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
-                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%% +%d rot.", 
-                            i, normalizedPos, rotations);
-                } else {
-                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%% +%d rot.", 
-                            i, normalizedPos, rotations);
-                }
-            } else {
-                if (ultraFineAdjustmentMode && currentPositionBeingAdjusted == i) {
-                    snprintf(buffer, sizeof(buffer), "Pos %d: %.2f%%", 
-                            i, normalizedPos);
-                } else {
-                    snprintf(buffer, sizeof(buffer), "Pos %d: %.1f%%", 
-                            i, normalizedPos);
-                }
-            }
-            
-            lv_label_set_text(label, buffer);
-        }
-    }
 }
 
 //===============================================
