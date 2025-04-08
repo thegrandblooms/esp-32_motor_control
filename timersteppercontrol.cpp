@@ -240,17 +240,16 @@ void TimerStepperControl::handleCommand(MotorCommand_t* cmd) {
             break;
         
         case CMD_MOVE_JOG:
-            // Move jog steps with no acceleration
+            // Make sure the new command completely replaces any pending movement
             _targetPosition = _currentPosition + cmd->position;
             _speed = cmd->speed;
             _driver->setSpeed(_speed);
             _minStepInterval = _speed > 0 ? 1000000 / _speed : 1000000;
             _stepsPerMs = _speed / 1000.0f;
             _stepAccumulator = 0.0f;
-            _currentSpeed = _speed; // Set to full speed immediately
             _isRunning = true;
             _isContinuous = false;
-            _jogMode = true;
+            _jogMode = true;  // Important - ensures we bypass acceleration
             _driver->enable();
             break;
             

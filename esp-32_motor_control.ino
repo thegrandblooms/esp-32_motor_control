@@ -357,6 +357,8 @@ int rotationPercentToSteps(float percent, float ratio) {
 void checkEncoderJogMode() {
     // Update last activity time
     lastMotorActivityTime = millis();
+    static unsigned long lastEncoderUpdateTime = 0;
+    static long encoderValueAccumulator = 0;
   
     // Exit jog mode if encoder button is pressed
     if (buttonPressed) {
@@ -371,30 +373,42 @@ void checkEncoderJogMode() {
   
     // Check for encoder movement
     if (encoderValue != lastJogEncoderValue) {
-        // Calculate movement
+        // Calculate movement but accumulate it
         long delta = encoderValue - lastJogEncoderValue;
         lastJogEncoderValue = encoderValue;
         
-        // Scale movement by sensitivity factor - use ENCODER_JOG_STEP_MULTIPLIER instead
-        int moveSteps = delta * ENCODER_JOG_STEP_MULTIPLIER;
+        // Add to accumulator
+        encoderValueAccumulator += delta;
         
-        // Apply direction setting from UI
-        if (!clockwiseDirection) {
-            moveSteps = -moveSteps;
-        }
-        
-        // Only move if there's significant encoder change
-        if (moveSteps != 0) {
-            // Send command to move steps with no acceleration
-            MotorCommand_t cmd;
-            cmd.cmd_type = CMD_MOVE_JOG;  // Use the jog-specific command
-            cmd.position = moveSteps;
-            cmd.speed = speedSetting;
-            controller.sendCommand(&cmd);
+        // Only process movements periodically to avoid command flooding
+        unsigned long currentTime = millis();
+        if (currentTime - lastEncoderUpdateTime >= 50) { // 50ms debounce
+            lastEncoderUpdateTime = currentTime;
             
-            Serial.print("Encoder jog: ");
-            Serial.print(moveSteps);
-            Serial.println(" steps");
+            // Only move if there's significant accumulated encoder change
+            if (abs(encoderValueAccumulator) >= 1) {
+                // Scale movement by sensitivity factor
+                int moveSteps = encoderValueAccumulator * ENCODER_JOG_STEP_MULTIPLIER;
+                
+                // Apply direction setting from UI
+                if (!clockwiseDirection) {
+                    moveSteps = -moveSteps;
+                }
+                
+                // Reset accumulator
+                encoderValueAccumulator = 0;
+                
+                // Send command to move steps with no acceleration
+                MotorCommand_t cmd;
+                cmd.cmd_type = CMD_MOVE_JOG;
+                cmd.position = moveSteps;
+                cmd.speed = speedSetting;
+                controller.sendCommand(&cmd);
+                
+                Serial.print("Encoder jog: ");
+                Serial.print(moveSteps);
+                Serial.println(" steps");
+            }
         }
     }
 }
